@@ -1,0 +1,110 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+language: en-US
+tone_instructions: >-
+  Be direct and specific. Name the file and line, the input or state that breaks, and what goes wrong as a result.
+  Skip praise and do not restate the diff.
+early_access: false
+
+reviews:
+  profile: assertive
+  auto_approvals:
+    enabled: true
+    min_blocking_severity: major
+  high_level_summary: true
+  review_status: true
+  review_details: true
+  commit_status: true
+  fail_commit_status: true
+  collapse_walkthrough: true
+  changed_files_summary: true
+  sequence_diagrams: false
+  estimate_code_review_effort: false
+  poem: false
+  in_progress_fortune: false
+  suggested_labels: false
+  suggested_reviewers: false
+  abort_on_close: true
+  auto_review:
+    enabled: true
+    drafts: false
+    auto_incremental_review: true
+    auto_pause_after_reviewed_commits: 0
+  pre_merge_checks:
+    title:
+      mode: warning
+      requirements: >-
+        A plain imperative sentence in sentence case, such as "Add the hub foundation". No type prefix such as
+        "feat:" or "fix:", no scope in brackets, no issue number and no trailing period.
+    description:
+      mode: warning
+  tools:
+    markdownlint:
+      enabled: false
+    yamllint:
+      enabled: false
+    pylint:
+      enabled: false
+    flake8:
+      enabled: false
+  path_instructions:
+    - path: "**/*.{py,go}"
+      instructions: >-
+        Comments: flag any comment that restates what the code does, describes a change ("now uses", "fixed",
+        "changed to", "updated to") or runs longer than two lines. A comment is only justified for a reason the code
+        cannot show, such as a workaround, a non-obvious constraint or a reference to an issue. Docstrings belong
+        only on public API and say what a caller needs to know, not how it works inside. Linter directives such as
+        noqa, nolint and type: ignore are fine.
+    - path: "**/*.py"
+      instructions: >-
+        Python 3.12, checked by pyright in strict mode and by ruff, so leave formatting and import order to them.
+        Flag Any leaking into public signatures, casts and "type: ignore" without a stated reason, and missing return
+        types. In async code flag blocking calls (time.sleep, synchronous file or network I/O, subprocess.run),
+        tasks created without keeping a reference or handling their exceptions, and locks held across awaits that
+        call the network. Flag "except Exception" or bare except that hides failures, mutable default arguments,
+        and work done at import time. Tests check behaviour through public interfaces, not private attributes, and
+        never wait on wall-clock time without a timeout.
+    - path: ".github/workflows/**"
+      instructions: >-
+        GitHub Actions. Every third-party action and every reusable workflow is pinned to a full 40-character commit
+        SHA with the version as a trailing comment (uses: owner/repo@<sha> # v1.2.3); flag tags, branches and short
+        SHAs. The workflow sets "permissions: {}" at the top and each job grants only what it needs; flag anything
+        broader. No ${{ }} expression is expanded inside a run: script; values reach the shell through env:. Every
+        actions/checkout sets persist-credentials: false unless a later step pushes. The CI workflow ends with a
+        job named "CI Done" that needs every other job and passes toJSON(needs) to the shared ci-done action; flag a
+        job missing from its needs. Pull request runs may cancel each other, runs on main must not.
+    - path: "**/*.md"
+      instructions: >-
+        Documentation is short, plain English for someone who runs or uses the project. Flag statements that no
+        longer match the code or workflows in the same pull request, commands that would not work as written, and
+        promotional language.
+    - path: "src/librebots/kit/**"
+      instructions: >-
+        The shared toolbox every Libre Bot uses, published as librebots-kit. It is not a framework: nothing may run
+        at import time or in the background unless the bot calls it or loads an extension by name. Public functions
+        and classes are typed and have short docstrings. User-facing text comes from the Fluent catalogs, never from
+        hard-coded strings, and every key exists in every language. Replies are built with the shared UI helpers so
+        all bots look the same. A process acts only for the guilds of its own shards; flag code that assumes one
+        process sees every guild. Only Discord ids are stored or sent to the hub; flag logging or storing message
+        contents, user names or tokens. Changes to public names need a major version once 1.0 is out.
+    - path: "src/librebots/kit/ext/**"
+      instructions: >-
+        Lightbulb extensions are thin loaders around the functions next to them. Logic belongs in those functions,
+        so that it can be tested without Discord; flag logic that only exists inside a command or listener.
+    - path: "tests/**"
+      instructions: >-
+        Tests run against an in-process fake of the hub, never against Discord or the network. Flag sleeps used for
+        synchronisation and tests that only assert that a call did not raise.
+
+chat:
+  art: false
+
+knowledge_base:
+  learnings:
+    scope: global
+  web_search:
+    enabled: true
+  linked_repositories:
+    - repository: libre-bots/hub
+      instructions: >-
+        The kit calls the hub through the librebots-hub client. Check calls, request fields and error handling
+        against the service definitions in proto/ and the client in clients/python.

@@ -1,0 +1,10 @@
+changelog:
+  categories:
+    - title: New
+      labels: [feature]
+    - title: Fixed
+      labels: [fix]
+    - title: Dependencies
+      labels: [dependencies]
+    - title: Other
+      labels: ["*"]

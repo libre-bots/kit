@@ -1,0 +1,65 @@
+name: release
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Version bump.
+        type: choice
+        options: [patch, minor, major]
+        default: patch
+      prerelease:
+        description: Create a release candidate.
+        type: boolean
+        default: false
+
+concurrency: release
+
+permissions: {}
+
+jobs:
+  prepare:
+    permissions:
+      contents: write
+      packages: write
+      checks: read
+    uses: libre-bots/.github/.github/workflows/release-prepare.yml@4ceec5ca66f3e4ad2b85a03f24d14b281bbede0e # v0.1.0
+    with:
+      bump: ${{ inputs.bump }}
+      prerelease: ${{ inputs.prerelease }}
+      python-projects: .:librebots.kit
+
+  pypi:
+    needs: prepare
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      id-token: write
+    steps:
+      - name: Download the distributions
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: python-dist
+          path: dist
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
+        with:
+          skip-existing: true
+
+  finish:
+    needs: [prepare, pypi]
+    permissions:
+      contents: write
+      packages: write
+      id-token: write
+      attestations: write
+    uses: libre-bots/.github/.github/workflows/release-finish.yml@4ceec5ca66f3e4ad2b85a03f24d14b281bbede0e # v0.1.0
+    with:
+      tag: ${{ needs.prepare.outputs.tag }}
+      version: ${{ needs.prepare.outputs.version }}
+      python-version: ${{ needs.prepare.outputs.python-version }}
+      previous-tag: ${{ needs.prepare.outputs.previous-tag }}
+      prerelease: ${{ needs.prepare.outputs.prerelease }}
+      images: ${{ needs.prepare.outputs.images }}
+      python-distributions: librebots-kit

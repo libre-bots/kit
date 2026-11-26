@@ -6,6 +6,7 @@ from typing import Self
 import hikari
 import msgspec
 from fluent.runtime import FluentBundle
+from fluent.runtime.errors import FluentFormatError
 from fluent.runtime.resolver import Pattern
 from fluent.syntax import FluentParser, ast
 from fluent.syntax.visitor import Visitor
@@ -109,8 +110,29 @@ def _parse(file: Path) -> ast.Resource:
     return resource
 
 
+class _Uses(Visitor):
+    def __init__(self) -> None:
+        super().__init__()
+        self.variables: set[str] = set()
+        self.messages: set[str] = set()
+
+    def visit_VariableReference(self, node: ast.VariableReference) -> None:
+        self.variables.add(node.id.name)
+        self.generic_visit(node)
+
+    def visit_MessageReference(self, node: ast.MessageReference) -> None:
+        self.messages.add(node.id.name if node.attribute is None else f"{node.id.name}.{node.attribute.name}")
+        self.generic_visit(node)
+
+
+def _uses(pattern: ast.Pattern) -> _Uses:
+    visitor = _Uses()
+    visitor.visit(pattern)
+    return visitor
+
+
 def _keys(code: str, resources: list[ast.Resource]) -> dict[str, frozenset[str]]:
-    keys: dict[str, frozenset[str]] = {}
+    uses: dict[str, _Uses] = {}
     defined: set[str] = set()
     for resource in resources:
         for entry in resource.body:
@@ -123,10 +145,28 @@ def _keys(code: str, resources: list[ast.Resource]) -> dict[str, frozenset[str]]
             if isinstance(entry, ast.Term):
                 continue
             if entry.value is not None:
-                keys[name] = _variables(entry.value)
+                uses[name] = _uses(entry.value)
             for attribute in entry.attributes:
-                keys[f"{name}.{attribute.id.name}"] = _variables(attribute.value)
-    return keys
+                key = f"{name}.{attribute.id.name}"
+                if key in uses:
+                    raise CatalogError(f"{code}: {key} is defined twice")
+                uses[key] = _uses(attribute.value)
+    return _with_referenced_variables(uses)
+
+
+def _with_referenced_variables(uses: Mapping[str, _Uses]) -> dict[str, frozenset[str]]:
+    resolved: dict[str, frozenset[str]] = {}
+
+    def variables(key: str, seen: frozenset[str]) -> frozenset[str]:
+        if key in resolved:
+            return resolved[key]
+        if key in seen or key not in uses:
+            return frozenset()
+        found = frozenset(uses[key].variables).union(*(variables(ref, seen | {key}) for ref in uses[key].messages))
+        resolved[key] = found
+        return found
+
+    return {key: variables(key, frozenset()) for key in uses}
 
 
 def _check_against_english(
@@ -138,22 +178,6 @@ def _check_against_english(
         if extra := variables - english[key]:
             names = ", ".join(f"${name}" for name in sorted(extra))
             raise CatalogError(f"{code}: {key} uses {names}, which the English text does not")
-
-
-class _Variables(Visitor):
-    def __init__(self) -> None:
-        super().__init__()
-        self.names: set[str] = set()
-
-    def visit_VariableReference(self, node: ast.VariableReference) -> None:
-        self.names.add(node.id.name)
-        self.generic_visit(node)
-
-
-def _variables(pattern: ast.Pattern) -> frozenset[str]:
-    visitor = _Variables()
-    visitor.visit(pattern)
-    return frozenset(visitor.names)
 
 
 def _pattern(bundle: FluentBundle, key: str) -> Pattern | None:
@@ -169,5 +193,10 @@ def _pattern(bundle: FluentBundle, key: str) -> Pattern | None:
 def _format(bundle: FluentBundle, code: str, key: str, pattern: Pattern, args: Mapping[str, str | int | float]) -> str:
     value, errors = bundle.format_pattern(pattern, dict(args))
     if errors:
-        _LOGGER.warning("Formatting %s in %s: %s", key, code, "; ".join(str(error) for error in errors))
+        _LOGGER.warning("Formatting %s in %s: %s", key, code, "; ".join(_describe(error) for error in errors))
     return str(value)
+
+
+def _describe(error: Exception) -> str:
+    # Other errors can quote the arguments, and those may hold what users wrote.
+    return str(error) if isinstance(error, FluentFormatError) else type(error).__name__

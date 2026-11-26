@@ -193,3 +193,34 @@ def test_rejects_a_translation_english_does_not_have(tmp_path: Path, german: str
 
     with pytest.raises(CatalogError, match=rf"de.*{key.replace('$', '[$]')}"):
         Catalog.load(tmp_path)
+
+
+def test_counts_the_variables_of_referenced_messages(tmp_path: Path) -> None:
+    write(tmp_path, "en-US", "person = { $name }\nhello = Hello { person }")
+    write(tmp_path, "de", "person = { $name }\nhello = Hallo { $name }")
+
+    assert Catalog.load(tmp_path).text("de", "hello", name="Ana") == "Hallo Ana"
+
+
+def test_loads_messages_that_reference_each_other_in_a_cycle(tmp_path: Path) -> None:
+    write(tmp_path, "en-US", "ping = { pong }\npong = { ping }")
+    write(tmp_path, "de", "ping = { pong }\npong = { ping }")
+
+    assert Catalog.load(tmp_path).locales == frozenset({hikari.Locale.EN_US, hikari.Locale.DE})
+
+
+def test_rejects_an_attribute_defined_twice(tmp_path: Path) -> None:
+    write(tmp_path, "en-US", "cmd-star =\n    .name = star\n    .name = stars")
+
+    with pytest.raises(CatalogError, match="cmd-star.name"):
+        Catalog.load(tmp_path)
+
+
+def test_keeps_argument_values_out_of_the_log(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    write(tmp_path, "en-US", "label = { NUMBER($value) }")
+
+    with caplog.at_level(logging.WARNING, logger="librebots.kit"):
+        Catalog.load(tmp_path).text("en-US", "label", value="private message")
+
+    assert "label" in caplog.text
+    assert "private message" not in caplog.text

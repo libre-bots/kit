@@ -452,6 +452,7 @@ dependencies = [
     { name = "hikari-lightbulb" },
     { name = "hikari-risa" },
     { name = "librebots-hub" },
+    { name = "msgspec" },
 ]
 
 [package.dev-dependencies]
@@ -468,6 +469,7 @@ requires-dist = [
     { name = "hikari-lightbulb", specifier = ">=3.2.7" },
     { name = "hikari-risa", specifier = ">=1.3.0" },
     { name = "librebots-hub", specifier = ">=0.1.0" },
+    { name = "msgspec", specifier = ">=0.22.0" },
 ]
 
 [package.metadata.requires-dev]

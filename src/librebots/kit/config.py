@@ -5,6 +5,8 @@ from typing import Annotated, Literal, Self
 
 import msgspec
 
+__all__ = ["Config", "ConfigError", "LogLevel"]
+
 LogLevel = Literal["TRACE_HIKARI", "DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
 
 _HttpUrl = Annotated[str, msgspec.Meta(pattern=r"^https?://\S+$")]

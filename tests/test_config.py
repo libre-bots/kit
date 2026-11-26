@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 import pytest
@@ -59,6 +60,8 @@ def test_reads_the_optional_values() -> None:
 
 
 def test_reads_os_environ_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in list(os.environ):
+        monkeypatch.delenv(name)
     for name, value in REQUIRED.items():
         monkeypatch.setenv(name, value)
 
@@ -173,8 +176,18 @@ def test_requires_shard_ids_and_count_together(values: dict[str, str]) -> None:
         ("0,0", "2"),
         ("0", "0"),
         ("0", "x"),
+        ("0", "4294967296"),
     ],
-    ids=["id too high", "negative id", "empty id", "not a number", "duplicate id", "count zero", "count not a number"],
+    ids=[
+        "id too high",
+        "negative id",
+        "empty id",
+        "not a number",
+        "duplicate id",
+        "count zero",
+        "count not a number",
+        "count above uint32",
+    ],
 )
 def test_rejects_invalid_shards(ids: str, count: str) -> None:
     with pytest.raises(ConfigError, match="SHARD_"):
@@ -182,8 +195,19 @@ def test_rejects_invalid_shards(ids: str, count: str) -> None:
 
 
 @pytest.mark.parametrize("name", ["PRIVACY_POLICY_URL", "SUPPORT_URL", "REST_URL"])
-@pytest.mark.parametrize("value", ["example.org/privacy", "ftp://example.org", "https://"])
-def test_rejects_a_url_without_http(name: str, value: str) -> None:
+@pytest.mark.parametrize(
+    "value",
+    [
+        "example.org/privacy",
+        "ftp://example.org",
+        "https://",
+        "https:///privacy",
+        "http://:8080/api",
+        "https://exa mple.org",
+        "http://rest-proxy:port/api",
+    ],
+)
+def test_rejects_an_invalid_url(name: str, value: str) -> None:
     with pytest.raises(ConfigError, match=name):
         Config.from_env(env(**{name: value}))
 

@@ -2,6 +2,7 @@ import os
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Annotated, Literal, Self
+from urllib.parse import urlsplit
 
 import msgspec
 
@@ -9,9 +10,9 @@ __all__ = ["Config", "ConfigError", "LogLevel"]
 
 LogLevel = Literal["TRACE_HIKARI", "DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
 
-_HttpUrl = Annotated[str, msgspec.Meta(pattern=r"^https?://\S+$")]
-_ShardId = Annotated[int, msgspec.Meta(ge=0)]
-_ShardCount = Annotated[int, msgspec.Meta(ge=1)]
+_UINT32_MAX = 2**32 - 1
+_ShardId = Annotated[int, msgspec.Meta(ge=0, le=_UINT32_MAX)]
+_ShardCount = Annotated[int, msgspec.Meta(ge=1, le=_UINT32_MAX)]
 
 _SECRETS = frozenset({"discord_token", "hub_token"})
 
@@ -32,9 +33,9 @@ class Config(msgspec.Struct, frozen=True, kw_only=True, rename="upper"):
     shard_count: _ShardCount | None = None
     operator_name: str
     operator_contact: str
-    privacy_policy_url: _HttpUrl
-    support_url: _HttpUrl | None = None
-    rest_url: _HttpUrl | None = None
+    privacy_policy_url: str
+    support_url: str | None = None
+    rest_url: str | None = None
     log_level: LogLevel = "INFO"
 
     @classmethod
@@ -60,6 +61,13 @@ class Config(msgspec.Struct, frozen=True, kw_only=True, rename="upper"):
                 raise ValueError("Every id in SHARD_IDS must be below SHARD_COUNT")
         if self.hub_ca_file is not None and not self.hub_tls:
             raise ValueError("HUB_CA_FILE needs HUB_TLS=true")
+        for name, url in (
+            ("PRIVACY_POLICY_URL", self.privacy_policy_url),
+            ("SUPPORT_URL", self.support_url),
+            ("REST_URL", self.rest_url),
+        ):
+            if url is not None and not _is_http_url(url):
+                raise ValueError(f"{name} must be an http or https URL with a host")
 
     def __repr__(self) -> str:
         fields = ", ".join(f"{name}={value!r}" for name, value in self.__rich_repr__())
@@ -100,6 +108,16 @@ def _read_secret(environ: Mapping[str, str], name: str) -> str | None:
     if secret is None:
         raise ConfigError(f"{name}_FILE names an empty file")
     return secret
+
+
+def _is_http_url(url: str) -> bool:
+    if any(char.isspace() for char in url):
+        return False
+    try:
+        parts = urlsplit(url)
+        return parts.scheme in {"http", "https"} and bool(parts.hostname) and (parts.port is None or parts.port > 0)
+    except ValueError:
+        return False
 
 
 def _clean(value: str | None) -> str | None:

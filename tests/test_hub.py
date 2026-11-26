@@ -100,6 +100,26 @@ async def test_sends_the_shard_label_of_the_app(fake_hub: tuple[str, FakeInfo]) 
     assert info.seen["libre-shards"] == "0,2/4"
 
 
+async def test_sends_the_configured_shards_without_an_app(fake_hub: tuple[str, FakeInfo]) -> None:
+    address, info = fake_hub
+
+    hub = await connect_hub(config(address, SHARD_IDS="2", SHARD_COUNT="4"))
+    await hub.close()
+
+    assert info.seen["libre-shards"] == "2/4"
+
+
+async def test_prefers_the_shards_of_the_app_to_the_configured_ones(fake_hub: tuple[str, FakeInfo]) -> None:
+    address, info = fake_hub
+
+    hub = await connect_hub(
+        config(address, SHARD_IDS="2", SHARD_COUNT="4"), shards=FakeApp({0: object(), 1: object()}, 2)
+    )
+    await hub.close()
+
+    assert info.seen["libre-shards"] == "0,1/2"
+
+
 async def test_sends_no_shard_label_before_the_shards_start(fake_hub: tuple[str, FakeInfo]) -> None:
     address, info = fake_hub
 

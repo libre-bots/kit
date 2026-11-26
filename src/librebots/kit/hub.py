@@ -58,20 +58,20 @@ class Hub(msgspec.Struct, frozen=True, kw_only=True):
 async def connect_hub(config: Config, *, shards: ShardedApp | None = None, timeout: float = 60) -> Hub:
     """Connect to the hub and return once it has answered.
 
-    With `shards`, every call names the shards that app runs at that moment. Waits up to `timeout` seconds for the
-    hub to come up. Raises `HubError` if it does not, if it rejects `HUB_TOKEN`, or if it is older than the installed
-    `librebots-hub` client.
+    Every call names the shards of this process: those `shards` runs at that moment, or else `SHARD_IDS` and
+    `SHARD_COUNT` from the configuration. Waits up to `timeout` seconds for the hub to come up. Raises `HubError` if
+    it does not, if it rejects `HUB_TOKEN`, or if it is older than the installed `librebots-hub` client.
     """
     channel = connect(
         config.hub_address,
         config.hub_token,
         tls=config.hub_tls,
         root_certificates=await _read_ca_file(config.hub_ca_file),
-        shards=None if shards is None else _shard_label(shards),
+        shards=_shard_label(config, shards),
     )
     try:
         hub_version = await _hub_version(channel, config.hub_address, timeout)
-        _check_version(hub_version)
+        _check_version(hub_version, await asyncio.to_thread(installed_version, "librebots-hub"))
     except BaseException:
         await channel.close()
         raise
@@ -94,13 +94,19 @@ async def _read_ca_file(path: str | None) -> bytes | None:
         raise HubError(f"Cannot read HUB_CA_FILE: {exc}") from exc
 
 
-def _shard_label(app: ShardedApp) -> Callable[[], tuple[Sequence[int], int] | None]:
-    def label() -> tuple[Sequence[int], int] | None:
-        if not app.shards:
-            return None
-        return tuple(app.shards), app.shard_count
+def _shard_label(config: Config, app: ShardedApp | None) -> Callable[[], tuple[Sequence[int], int] | None] | None:
+    if app is not None:
 
-    return label
+        def label() -> tuple[Sequence[int], int] | None:
+            if not app.shards:
+                return None
+            return tuple(app.shards), app.shard_count
+
+        return label
+    if config.shard_ids is not None and config.shard_count is not None:
+        configured = (config.shard_ids, config.shard_count)
+        return lambda: configured
+    return None
 
 
 async def _hub_version(channel: grpc.aio.Channel, address: str, timeout: float) -> str:
@@ -120,14 +126,14 @@ async def _hub_version(channel: grpc.aio.Channel, address: str, timeout: float) 
     return response.version
 
 
-def _check_version(hub_version: str) -> None:
+def _check_version(hub_version: str, client_version: str) -> None:
     if hub_version == "dev":
         _LOGGER.warning("The hub reports no version, so kit cannot check that it offers what this bot calls")
         return
     hub = _major_minor(hub_version)
     if hub is None:
         raise HubError(f"The hub reported an unknown version: {hub_version!r}")
-    client = _major_minor(installed_version("librebots-hub"))
+    client = _major_minor(client_version)
     if client is not None and hub < client:
         raise HubError(
             f"The hub runs {hub_version}, but this bot needs {client[0]}.{client[1]} or newer; update the hub first"

@@ -1,6 +1,8 @@
+from __future__ import annotations
+
 import logging
 import socket
-from collections.abc import AsyncGenerator, Mapping
+from collections.abc import AsyncGenerator, Awaitable, Mapping
 from importlib.metadata import version
 from pathlib import Path
 
@@ -25,7 +27,7 @@ class FakeInfo(info_pb2_grpc.InfoServiceServicer):
     async def GetInfo(
         self,
         request: info_pb2.GetInfoRequest,
-        context: grpc.aio.ServicerContext[info_pb2.GetInfoRequest, info_pb2.GetInfoResponse],
+        context: grpc.aio.ServicerContext[info_pb2.GetInfoRequest, Awaitable[info_pb2.GetInfoResponse]],
     ) -> info_pb2.GetInfoResponse:
         self.seen = dict(context.invocation_metadata() or ())
         if self.seen.get("authorization") != f"Bearer {TOKEN}":

@@ -1,0 +1,282 @@
+from __future__ import annotations
+
+import asyncio
+import logging
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable
+
+import grpc
+import grpc.aio
+import hikari
+import pytest
+from librebots.hub.v1 import guilds_pb2, guilds_pb2_grpc
+from librebots.hub.v1.guilds_pb2_grpc import GuildServiceStub
+from librebots.hub.v1.privacy_pb2_grpc import PrivacyServiceStub
+from librebots.hub.v1.stats_pb2_grpc import StatsServiceStub
+
+from librebots.kit import GuildLister, GuildReporter, Hub, HubError, SyncResult
+
+type Context[Request, Response] = grpc.aio.ServicerContext[Request, Awaitable[Response]]
+
+
+def on_shard(shard: int, nth: int = 1, count: int = 4) -> int:
+    return (count * nth + shard) << 22
+
+
+class FakeGuilds(guilds_pb2_grpc.GuildServiceServicer):
+    def __init__(self) -> None:
+        self.log: list[str] = []
+        self.joined: list[guilds_pb2.GuildJoinedRequest] = []
+        self.synced: list[guilds_pb2.SyncGuildsRequest] = []
+        self.failing: set[str] = set()
+
+    async def _check[Request, Response](self, name: str, context: Context[Request, Response]) -> None:
+        if name in self.failing:
+            await context.abort(grpc.StatusCode.UNAVAILABLE, "hub is down")
+
+    async def GuildJoined(
+        self,
+        request: guilds_pb2.GuildJoinedRequest,
+        context: Context[guilds_pb2.GuildJoinedRequest, guilds_pb2.GuildJoinedResponse],
+    ) -> guilds_pb2.GuildJoinedResponse:
+        await self._check("joined", context)
+        self.log.append(f"joined {request.guild_id}")
+        self.joined.append(request)
+        return guilds_pb2.GuildJoinedResponse(settings=guilds_pb2.GuildSettings(guild_id=request.guild_id, locale="de"))
+
+    async def GuildLeft(
+        self,
+        request: guilds_pb2.GuildLeftRequest,
+        context: Context[guilds_pb2.GuildLeftRequest, guilds_pb2.GuildLeftResponse],
+    ) -> guilds_pb2.GuildLeftResponse:
+        await self._check("left", context)
+        self.log.append(f"left {request.guild_id}")
+        return guilds_pb2.GuildLeftResponse()
+
+    async def SyncGuilds(
+        self,
+        request: guilds_pb2.SyncGuildsRequest,
+        context: Context[guilds_pb2.SyncGuildsRequest, guilds_pb2.SyncGuildsResponse],
+    ) -> guilds_pb2.SyncGuildsResponse:
+        await self._check("sync", context)
+        self.log.append(f"sync {','.join(str(guild.guild_id) for guild in request.guilds)}")
+        self.synced.append(request)
+        return guilds_pb2.SyncGuildsResponse(joined=1, left=2)
+
+
+class FakeGuild:
+    def __init__(self, guild_id: int, members: int = 1) -> None:
+        self.id = guild_id
+        self.approximate_member_count = members
+
+
+class FakeRest:
+    def __init__(self, guilds: list[FakeGuild]) -> None:
+        self.guilds = guilds
+        self.listing = asyncio.Event()
+        self.proceed = asyncio.Event()
+        self.proceed.set()
+
+    def fetch_my_guilds(self) -> AsyncIterator[FakeGuild]:
+        return self._guilds()
+
+    async def _guilds(self) -> AsyncIterator[FakeGuild]:
+        self.listing.set()
+        await self.proceed.wait()
+        for guild in self.guilds:
+            yield guild
+
+
+def rest_client_lists_guilds(rest: hikari.api.RESTClient) -> GuildLister:
+    return rest
+
+
+@pytest.fixture
+async def hub() -> AsyncGenerator[tuple[Hub, FakeGuilds]]:
+    # The fake answers only the calls guild reporting makes.
+    fake = FakeGuilds()  # pyright: ignore[reportAbstractUsage]
+    server = grpc.aio.server()
+    guilds_pb2_grpc.add_GuildServiceServicer_to_server(fake, server)
+    port = server.add_insecure_port("127.0.0.1:0")
+    await server.start()
+    channel = grpc.aio.insecure_channel(f"127.0.0.1:{port}")
+    try:
+        yield (
+            Hub(
+                channel=channel,
+                version="test",
+                guilds=GuildServiceStub(channel),
+                privacy=PrivacyServiceStub(channel),
+                stats=StatsServiceStub(channel),
+            ),
+            fake,
+        )
+    finally:
+        await channel.close()
+        await server.stop(0)
+
+
+async def test_reports_a_join_and_returns_the_language(hub: tuple[Hub, FakeGuilds]) -> None:
+    reporter, fake = GuildReporter(hub[0]), hub[1]
+
+    locale = await reporter.joined(on_shard(0), preferred_locale="fr", member_count=12)
+
+    assert locale == "de"
+    request = fake.joined[0]
+    assert (request.guild_id, request.preferred_locale, request.member_count) == (on_shard(0), "fr", 12)
+
+
+async def test_reports_zero_members_when_the_count_is_unknown(hub: tuple[Hub, FakeGuilds]) -> None:
+    await GuildReporter(hub[0]).joined(on_shard(0), preferred_locale="en-US", member_count=None)
+
+    assert hub[1].joined[0].member_count == 0
+
+
+async def test_reports_a_leave(hub: tuple[Hub, FakeGuilds]) -> None:
+    await GuildReporter(hub[0]).left(on_shard(2))
+
+    assert hub[1].log == [f"left {on_shard(2)}"]
+
+
+@pytest.mark.parametrize("call", ["joined", "left", "sync"])
+async def test_raises_hub_error_when_the_hub_fails(hub: tuple[Hub, FakeGuilds], call: str) -> None:
+    reporter, fake = GuildReporter(hub[0]), hub[1]
+    fake.failing.add(call)
+
+    with pytest.raises(HubError, match="UNAVAILABLE"):
+        if call == "joined":
+            await reporter.joined(on_shard(0), preferred_locale="en-US", member_count=1)
+        elif call == "left":
+            await reporter.left(on_shard(0))
+        else:
+            await reporter.sync(FakeRest([]), [0], 1)
+
+
+async def test_syncs_the_guilds_on_the_given_shards(hub: tuple[Hub, FakeGuilds]) -> None:
+    reporter, fake = GuildReporter(hub[0]), hub[1]
+    rest = FakeRest([FakeGuild(on_shard(shard, nth), 10 * shard + nth) for shard in range(4) for nth in (1, 2)])
+
+    result = await reporter.sync(rest, [3, 1], 4)
+
+    request = fake.synced[0]
+    assert list(request.shards.shard_ids) == [1, 3]
+    assert request.shards.shard_count == 4
+    assert {(guild.guild_id, guild.member_count) for guild in request.guilds} == {
+        (on_shard(1, 1), 11),
+        (on_shard(1, 2), 12),
+        (on_shard(3, 1), 31),
+        (on_shard(3, 2), 32),
+    }
+    assert result == SyncResult(joined=1, left=2)
+
+
+async def test_sends_no_language_with_a_sync(hub: tuple[Hub, FakeGuilds]) -> None:
+    await GuildReporter(hub[0]).sync(FakeRest([FakeGuild(on_shard(0))]), [0], 1)
+
+    assert hub[1].synced[0].guilds[0].preferred_locale == ""
+
+
+async def run_with_paused_listing(reporter: GuildReporter, rest: FakeRest, during: AsyncIterator[None]) -> None:
+    rest.proceed.clear()
+    sync = asyncio.create_task(reporter.sync(rest, [0], 1))
+    async with asyncio.timeout(5):
+        await rest.listing.wait()
+        async for _ in during:
+            pass
+        rest.proceed.set()
+        await sync
+
+
+async def test_reports_a_join_again_after_a_sync_that_missed_it(hub: tuple[Hub, FakeGuilds]) -> None:
+    reporter, fake = GuildReporter(hub[0]), hub[1]
+    old, new = on_shard(0, 1), on_shard(0, 2)
+
+    async def join() -> AsyncIterator[None]:
+        await reporter.joined(new, preferred_locale="en-US", member_count=3)
+        yield
+
+    await run_with_paused_listing(reporter, FakeRest([FakeGuild(old)]), join())
+
+    assert fake.log == [f"joined {new}", f"sync {old}", f"joined {new}"]
+
+
+async def test_reports_a_leave_again_after_a_sync_that_still_listed_the_guild(hub: tuple[Hub, FakeGuilds]) -> None:
+    reporter, fake = GuildReporter(hub[0]), hub[1]
+    guild = on_shard(0)
+
+    async def leave() -> AsyncIterator[None]:
+        await reporter.left(guild)
+        yield
+
+    await run_with_paused_listing(reporter, FakeRest([FakeGuild(guild)]), leave())
+
+    assert fake.log == [f"left {guild}", f"sync {guild}", f"left {guild}"]
+
+
+async def test_reports_only_the_latest_change_of_a_guild_again(hub: tuple[Hub, FakeGuilds]) -> None:
+    reporter, fake = GuildReporter(hub[0]), hub[1]
+    guild = on_shard(0)
+
+    async def join_and_leave() -> AsyncIterator[None]:
+        await reporter.joined(guild, preferred_locale="en-US", member_count=3)
+        await reporter.left(guild)
+        yield
+
+    await run_with_paused_listing(reporter, FakeRest([]), join_and_leave())
+
+    assert fake.log == [f"joined {guild}", f"left {guild}", "sync ", f"left {guild}"]
+
+
+async def test_reports_changes_before_a_sync_only_once(hub: tuple[Hub, FakeGuilds]) -> None:
+    reporter, fake = GuildReporter(hub[0]), hub[1]
+    guild = on_shard(0)
+
+    await reporter.joined(guild, preferred_locale="en-US", member_count=3)
+    await reporter.sync(FakeRest([FakeGuild(guild)]), [0], 1)
+
+    assert fake.log == [f"joined {guild}", f"sync {guild}"]
+
+
+async def test_logs_a_repeated_report_that_fails_and_keeps_the_sync_result(
+    hub: tuple[Hub, FakeGuilds], caplog: pytest.LogCaptureFixture
+) -> None:
+    reporter, fake = GuildReporter(hub[0]), hub[1]
+    guild = on_shard(0)
+    result: list[SyncResult] = []
+
+    async def join_then_break_the_hub() -> AsyncIterator[None]:
+        await reporter.joined(guild, preferred_locale="en-US", member_count=3)
+        fake.failing.add("joined")
+        yield
+
+    rest = FakeRest([])
+    rest.proceed.clear()
+    sync = asyncio.create_task(reporter.sync(rest, [0], 1))
+    with caplog.at_level(logging.WARNING, logger="librebots.kit"):
+        async with asyncio.timeout(5):
+            await rest.listing.wait()
+            async for _ in join_then_break_the_hub():
+                pass
+            rest.proceed.set()
+            result.append(await sync)
+
+    assert result == [SyncResult(joined=1, left=2)]
+    assert str(guild) in caplog.text
+
+
+async def test_runs_one_sync_at_a_time(hub: tuple[Hub, FakeGuilds]) -> None:
+    reporter = GuildReporter(hub[0])
+    first, second = FakeRest([]), FakeRest([])
+    first.proceed.clear()
+
+    async with asyncio.timeout(5):
+        running = asyncio.create_task(reporter.sync(first, [0], 1))
+        await first.listing.wait()
+        waiting = asyncio.create_task(reporter.sync(second, [0], 1))
+        for _ in range(10):
+            await asyncio.sleep(0)
+        started_early = second.listing.is_set()
+        first.proceed.set()
+        await asyncio.gather(running, waiting)
+
+    assert not started_early
+    assert second.listing.is_set()

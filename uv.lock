@@ -185,6 +185,15 @@ wheels = [
 ]
 
 [[package]]
+name = "babel"
+version = "2.19.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/32/44/744169ce3677a541439bc9506ef08bd85674e9d6e3895ebe5a87ff65fb7a/babel-2.19.0.tar.gz", hash = "sha256:fddd2cbbbac7c299af3c2880be23609c331bd94f0912baca6cb0abfe054dfc27", size = 10695455, upload-time = "2026-11-24T20:14:32.427Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/71/3b/ddf4b07be846bfa361683729b5948c9c61a87fbdf09e69540d8e586bb7c5/babel-2.19.0-py3-none-any.whl", hash = "sha256:6d49734aed1d595b2c065d012174df8c83964692f26fc461702281634dd7555b", size = 10983582, upload-time = "2026-11-24T20:14:30.163Z" },
+]
+
+[[package]]
 name = "colorama"
 version = "0.4.6"
 source = { registry = "https://pypi.org/simple" }
@@ -212,6 +221,34 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/91/a6/1dca5942ebee52bf5c9bb787bf5e578058bdd214561d423b71e9b8634f3f/confspec-0.1.0.tar.gz", hash = "sha256:e4a014170e33b3f9655dc559497672fbff93d7da7354ffed01d2827fe7cb4ac4", size = 63936, upload-time = "2026-07-13T09:26:21.457Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/45/7a/78d8612ca315c47b4cdd702cf50fd84aa1f22c492eec4fde74c9b41ff4b1/confspec-0.1.0-py3-none-any.whl", hash = "sha256:57d7ce15d424708962fb7bf0077c162fbdb209468fb2620ecf69d22989c6bd75", size = 18768, upload-time = "2026-07-13T09:26:20.002Z" },
+]
+
+[[package]]
+name = "fluent-runtime"
+version = "0.4.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "attrs" },
+    { name = "babel" },
+    { name = "fluent-syntax" },
+    { name = "pytz" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/dc/54/94bbd857443565a5776027165fe1e2634d836681d7d9c8992a2fd0ce8302/fluent.runtime-0.4.0.tar.gz", hash = "sha256:cb5ef96a58a3f67acaaca046d1201d202a1ebf2823e5e664370f359bae20574d", size = 17591, upload-time = "2023-03-16T11:10:35.165Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e5/89/a19b0bdfc74977b44aca2ad2e0600fd89c778184fcbb7fc44ba1002cc7b5/fluent.runtime-0.4.0-py2.py3-none-any.whl", hash = "sha256:51fd02582c2363e1106d7051642967a1b7f406dd9c317bd4600a73ede40c5146", size = 15627, upload-time = "2023-03-16T11:10:33.43Z" },
+]
+
+[[package]]
+name = "fluent-syntax"
+version = "0.19.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/51/52/de75f2faf499ed5a089acff2ab8bda5fc3b8db8a3f1615428ef9ccbf1917/fluent.syntax-0.19.0.tar.gz", hash = "sha256:920326d7f46864b9758f0044e9968e3112198bc826acee16ddd8f11d359004fd", size = 15039, upload-time = "2023-03-16T11:03:24.023Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/54/28/475734afb670bf7932caa1828183a4687cac51111950b9fb633c4f976afc/fluent.syntax-0.19.0-py2.py3-none-any.whl", hash = "sha256:b352b3475fac6c6ed5f06527921f432aac073d764445508ee5218aeccc7cc5c4", size = 16432, upload-time = "2023-03-16T11:03:21.934Z" },
 ]
 
 [[package]]
@@ -448,6 +485,7 @@ name = "librebots-kit"
 version = "0.0.0"
 source = { editable = "." }
 dependencies = [
+    { name = "fluent-runtime" },
     { name = "hikari" },
     { name = "hikari-lightbulb" },
     { name = "hikari-risa" },
@@ -466,6 +504,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "fluent-runtime", specifier = ">=0.4.0" },
     { name = "hikari", specifier = ">=2.6.0" },
     { name = "hikari-lightbulb", specifier = ">=3.2.7" },
     { name = "hikari-risa", specifier = ">=1.3.0" },
@@ -900,6 +939,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/2c/de/80724f9b5b9eca1a654179cae6edc51aaa0a355a9834a736e2a188b91780/pytest_asyncio-1.5.0.tar.gz", hash = "sha256:92c8fa83ca419fd0d4bd6a34df6520dae435841d3733c319343249492adf37f7", size = 146227, upload-time = "2026-11-12T16:35:49.845Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/27/2d/e600d8f47597a803641704aba367c7266cd621f86561ec36da9888f160ec/pytest_asyncio-1.5.0-py3-none-any.whl", hash = "sha256:557f255ee03cc84f84a8d5f438bc9c6e0f714bf86970ae743c7ecb5a38d7e07d", size = 17215, upload-time = "2026-11-12T16:35:48.446Z" },
+]
+
+[[package]]
+name = "pytz"
+version = "2026.6"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/f5/b0/168030b0bfcc334cf09fa3313afdb888d892c8a0027324683d1de0ec277e/pytz-2026.6.tar.gz", hash = "sha256:3b0fc2727707663d6e517936f444fd8a8b240f1fc32f4bf7ee03274245945284", size = 318520, upload-time = "2026-10-29T09:05:47.011Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b6/25/564f3fc5b70c1398d706c51f2b1470d0ea0b1b2f96fee67877b6f5bdf3b6/pytz-2026.6-py2.py3-none-any.whl", hash = "sha256:7fed3fee8fd6bd4a2b7b75a8d56021d0624127bf69bd5691f115db929ac570b3", size = 506321, upload-time = "2026-10-29T09:05:45.14Z" },
 ]
 
 [[package]]

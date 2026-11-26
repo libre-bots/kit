@@ -224,3 +224,17 @@ def test_keeps_argument_values_out_of_the_log(tmp_path: Path, caplog: pytest.Log
 
     assert "label" in caplog.text
     assert "private message" not in caplog.text
+
+
+def test_counts_variables_reached_through_a_cycle(tmp_path: Path) -> None:
+    english = """
+first = { $count ->
+    [one] { second }
+   *[other] { $name }
+}
+second = { first }
+"""
+    write(tmp_path, "en-US", english)
+    write(tmp_path, "de", "second = { $name }")
+
+    assert Catalog.load(tmp_path).text("de", "second", name="Ana") == "Ana"

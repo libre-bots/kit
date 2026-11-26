@@ -155,18 +155,20 @@ def _keys(code: str, resources: list[ast.Resource]) -> dict[str, frozenset[str]]
 
 
 def _with_referenced_variables(uses: Mapping[str, _Uses]) -> dict[str, frozenset[str]]:
-    resolved: dict[str, frozenset[str]] = {}
-
-    def variables(key: str, seen: frozenset[str]) -> frozenset[str]:
-        if key in resolved:
-            return resolved[key]
-        if key in seen or key not in uses:
-            return frozenset()
-        found = frozenset(uses[key].variables).union(*(variables(ref, seen | {key}) for ref in uses[key].messages))
-        resolved[key] = found
-        return found
-
-    return {key: variables(key, frozenset()) for key in uses}
+    result: dict[str, frozenset[str]] = {}
+    for key in uses:
+        variables: set[str] = set()
+        reached, pending = {key}, [key]
+        while pending:
+            current = uses.get(pending.pop())
+            if current is None:
+                continue
+            variables |= current.variables
+            for reference in current.messages - reached:
+                reached.add(reference)
+                pending.append(reference)
+        result[key] = frozenset(variables)
+    return result
 
 
 def _check_against_english(

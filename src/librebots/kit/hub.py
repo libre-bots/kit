@@ -3,13 +3,13 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Sequence
 from importlib.metadata import version as installed_version
 from pathlib import Path
-from typing import Protocol
 
 import grpc
 import grpc.aio
+import hikari
 import msgspec
 from librebots.hub import connect
 from librebots.hub.v1.guilds_pb2_grpc import GuildServiceStub
@@ -20,7 +20,7 @@ from librebots.hub.v1.stats_pb2_grpc import StatsServiceStub
 
 from librebots.kit.config import Config
 
-__all__ = ["Hub", "HubError", "ShardedApp", "connect_hub"]
+__all__ = ["Hub", "HubError", "connect_hub"]
 
 _LOGGER = logging.getLogger(__name__)
 _VERSION = re.compile(r"(\d+)\.(\d+)\.\d+")
@@ -28,16 +28,6 @@ _VERSION = re.compile(r"(\d+)\.(\d+)\.\d+")
 
 class HubError(Exception):
     """The hub could not be reached, rejected the bot or is too old for it."""
-
-
-class ShardedApp(Protocol):
-    """Anything with hikari's `shards` and `shard_count`, such as a `hikari.GatewayBot`."""
-
-    @property
-    def shards(self) -> Mapping[int, object]: ...
-
-    @property
-    def shard_count(self) -> int: ...
 
 
 class Hub(msgspec.Struct, frozen=True, kw_only=True):
@@ -57,7 +47,7 @@ class Hub(msgspec.Struct, frozen=True, kw_only=True):
         await self.channel.close()
 
 
-async def connect_hub(config: Config, *, shards: ShardedApp | None = None, timeout: float = 60) -> Hub:
+async def connect_hub(config: Config, *, shards: hikari.ShardAware | None = None, timeout: float = 60) -> Hub:
     """Connect to the hub and return once it has answered.
 
     Every call names the shards of this process: those `shards` runs at that moment, or else `SHARD_IDS` and
@@ -96,7 +86,9 @@ async def _read_ca_file(path: str | None) -> bytes | None:
         raise HubError(f"Cannot read HUB_CA_FILE: {exc}") from exc
 
 
-def _shard_label(config: Config, app: ShardedApp | None) -> Callable[[], tuple[Sequence[int], int] | None] | None:
+def _shard_label(
+    config: Config, app: hikari.ShardAware | None
+) -> Callable[[], tuple[Sequence[int], int] | None] | None:
     if app is not None:
 
         def label() -> tuple[Sequence[int], int] | None:

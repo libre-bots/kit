@@ -3,35 +3,19 @@ from __future__ import annotations
 import asyncio
 import functools
 import logging
-from collections.abc import AsyncIterable, Awaitable, Callable, Collection
-from typing import Protocol
+from collections.abc import Awaitable, Callable, Collection
 
 import grpc.aio
+import hikari
 import msgspec
 from librebots.hub.v1.guilds_pb2 import GuildJoinedRequest, GuildLeftRequest, SyncedGuild, SyncGuildsRequest
 from librebots.hub.v1.shards_pb2 import ShardSet
 
 from librebots.kit.hub import Hub, HubError
 
-__all__ = ["GuildLister", "GuildReporter", "ListedGuild", "SyncResult"]
+__all__ = ["GuildReporter", "SyncResult"]
 
 _LOGGER = logging.getLogger(__name__)
-
-
-class ListedGuild(Protocol):
-    """A guild as Discord's guild list returns it, such as hikari's `OwnGuild`."""
-
-    @property
-    def id(self) -> int: ...
-
-    @property
-    def approximate_member_count(self) -> int: ...
-
-
-class GuildLister(Protocol):
-    """Anything that lists the bot's guilds with their member counts, such as hikari's `RESTClient`."""
-
-    def fetch_my_guilds(self) -> AsyncIterable[ListedGuild]: ...
 
 
 class SyncResult(msgspec.Struct, frozen=True, kw_only=True):
@@ -68,7 +52,7 @@ class GuildReporter:
         self._remember(guild_id, report)
         await report()
 
-    async def sync(self, rest: GuildLister, shard_ids: Collection[int], shard_count: int) -> SyncResult:
+    async def sync(self, rest: hikari.api.RESTClient, shard_ids: Collection[int], shard_count: int) -> SyncResult:
         """Send every guild on these shards, and the hub marks the bot's other guilds on them as left.
 
         Syncs run one at a time. Raises `HubError` if the hub fails.

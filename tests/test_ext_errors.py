@@ -19,6 +19,10 @@ EXTENSION = "librebots.kit.ext.errors"
 RED = hikari.Color(0xE24B4A)
 
 
+TOKEN = "aW50ZXJhY3Rpb246c2VjcmV0"
+TOKEN_URL = f"https://discord.com/api/v10/webhooks/123/{TOKEN}/messages/@original"
+
+
 def forbidden() -> hikari.ForbiddenError:
     return hikari.ForbiddenError(url="https://discord.com/api", headers={}, raw_body="")
 
@@ -30,6 +34,7 @@ FAILURES: dict[str, Callable[[], Exception]] = {
         "GuildJoined failed with NOT_FOUND", code=grpc.StatusCode.NOT_FOUND, reason=None
     ),
     "broken": lambda: RuntimeError("it broke"),
+    "webhook-gone": lambda: hikari.NotFoundError(url=TOKEN_URL, headers={}, raw_body="", message="Unknown Webhook"),
 }
 
 
@@ -146,8 +151,16 @@ async def test_tells_the_caller_a_permission_is_missing(bot: Bot) -> None:
     assert texts[0] == "### Missing permission"
 
 
-@pytest.mark.parametrize("name", ["broken", "refused"])
-async def test_gives_a_reference_that_the_log_repeats(bot: Bot, caplog: pytest.LogCaptureFixture, name: str) -> None:
+@pytest.mark.parametrize(
+    ("name", "logged"),
+    [
+        ("broken", "RuntimeError: it broke"),
+        ("refused", "HubRequestError: GuildJoined failed with NOT_FOUND"),
+    ],
+)
+async def test_gives_a_reference_that_the_log_repeats(
+    bot: Bot, caplog: pytest.LogCaptureFixture, name: str, logged: str
+) -> None:
     with caplog.at_level(logging.ERROR, logger=errors.__name__):
         response = await bot.run(Command(name))
 
@@ -155,8 +168,17 @@ async def test_gives_a_reference_that_the_log_repeats(bot: Bot, caplog: pytest.L
     assert texts[0] == "### Something went wrong"
     (record,) = caplog.records
     assert reference_in(texts[1]) in record.getMessage()
-    assert record.exc_info is not None
-    assert repr(record.exc_info[1]) == repr(FAILURES[name]())
+    assert "Traceback" in record.getMessage()
+    assert logged in record.getMessage()
+
+
+async def test_logs_no_interaction_token(bot: Bot, caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.ERROR, logger=errors.__name__):
+        await bot.run(Command("webhook-gone"))
+
+    assert "Unknown Webhook" in caplog.text
+    assert "/webhooks/123/***/messages" in caplog.text
+    assert TOKEN not in caplog.text
 
 
 async def test_answers_in_the_language_of_the_caller(bot: Bot) -> None:
@@ -182,13 +204,14 @@ async def test_leaves_errors_to_the_handlers_of_the_bot(bot: Bot) -> None:
 async def test_logs_an_answer_that_fails(bot: Bot, caplog: pytest.LogCaptureFixture) -> None:
     command = Command("hub-down")
     command.response.side_effect = hikari.NotFoundError(
-        url="https://discord.com/api", headers={}, raw_body="", message="Unknown interaction"
+        url=TOKEN_URL, headers={}, raw_body="", message="Unknown interaction"
     )
 
     with caplog.at_level(logging.WARNING, logger=errors.__name__):
         await bot.run(command)
 
     assert "Unknown interaction" in caplog.text
+    assert TOKEN not in caplog.text
 
 
 async def test_tells_the_clicker_the_hub_is_unreachable(bot: Bot) -> None:
@@ -210,5 +233,4 @@ async def test_gives_a_clicker_a_reference_that_the_log_repeats(bot: Bot, caplog
     _, texts = reply(response)
     (record,) = caplog.records
     assert reference_in(texts[1]) in record.getMessage()
-    assert record.exc_info is not None
-    assert repr(record.exc_info[1]) == repr(FAILURES["broken"]())
+    assert "RuntimeError: it broke" in record.getMessage()

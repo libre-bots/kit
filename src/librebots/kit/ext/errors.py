@@ -7,7 +7,9 @@ run last, so a bot's own error handlers at the default priority come first.
 from __future__ import annotations
 
 import logging
+import re
 import secrets
+import traceback
 from collections.abc import Sequence
 
 import hikari
@@ -23,6 +25,8 @@ __all__ = ["loader"]
 _LOGGER = logging.getLogger(__name__)
 _PRIORITY = -100
 _RED = 0xE24B4A
+# hikari puts the request URL into its HTTP errors, and these URLs carry the interaction token.
+_TOKEN_IN_URL = re.compile(r"(/(?:interactions|webhooks)/\d+/)[^/\s?#']+")
 
 loader = lightbulb.Loader()
 
@@ -36,7 +40,7 @@ async def _answer_command(
     try:
         await ctx.respond(**ui.render(layout), ephemeral=True)
     except hikari.HTTPError as error:
-        _LOGGER.warning("Could not tell the caller that a command failed: %s", error)
+        _LOGGER.warning("Could not tell the caller that a command failed: %s", _without_tokens(str(error)))
     return True
 
 
@@ -47,7 +51,7 @@ async def _answer_click(
     try:
         await ctx.respond(**ui.render(layout), ephemeral=True)
     except hikari.HTTPError as error:
-        _LOGGER.warning("Could not tell the clicker that a click failed: %s", error)
+        _LOGGER.warning("Could not tell the clicker that a click failed: %s", _without_tokens(str(error)))
     return True
 
 
@@ -70,13 +74,18 @@ def _reply(catalog: Catalog, locale: hikari.Locale | str, errors: Sequence[Excep
 def _classify(errors: Sequence[Exception], failed: str) -> tuple[str, str | None]:
     for error in errors:
         if isinstance(error, HubUnavailableError):
-            _LOGGER.warning("%s failed because the hub is unavailable: %s", failed, error)
+            _LOGGER.warning("%s failed because the hub is unavailable: %s", failed, _without_tokens(str(error)))
             return "kit-error-hub", None
     for error in errors:
         if isinstance(error, hikari.ForbiddenError):
-            _LOGGER.info("%s failed for a missing permission: %s", failed, error)
+            _LOGGER.info("%s failed for a missing permission: %s", failed, _without_tokens(str(error)))
             return "kit-error-forbidden", None
     reference = secrets.token_hex(3)
     for error in errors:
-        _LOGGER.error("%s failed, reference %s", failed, reference, exc_info=error)
+        described = _without_tokens("".join(traceback.format_exception(error)).rstrip())
+        _LOGGER.error("%s failed, reference %s\n%s", failed, reference, described)
     return "kit-error-unknown", reference
+
+
+def _without_tokens(text: str) -> str:
+    return _TOKEN_IN_URL.sub(r"\1***", text)

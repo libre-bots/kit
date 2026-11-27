@@ -268,22 +268,34 @@ async def _delete_after_the_typed_name(
     )
     typed = typed.strip().casefold()
 
-    finished: ui.Container | None = None
-    refusal = "kit-error-hub"
+    guild: hikari.Guild | None = None
+    refusal: str | None = None
+    if interaction.custom_id == _DELETE_USER_MODAL:
+        if typed != interaction.user.username.casefold():
+            refusal = "kit-privacy-delete.mismatch"
+    elif (guild := await _guild_if_owner(interaction)) is None:
+        refusal = "kit-privacy-server.owner-only"
+    elif typed != guild.name.casefold():
+        refusal = "kit-privacy-server.mismatch"
+    if refusal is not None:
+        await interaction.create_initial_response(
+            hikari.ResponseType.MESSAGE_CREATE,
+            **ui.render(_nothing_deleted(catalog, locale, refusal)),
+            flags=hikari.MessageFlag.EPHEMERAL,
+        )
+        return
+
+    # Discord drops an answer that comes after three seconds, and the hub may take longer.
+    await interaction.create_initial_response(hikari.ResponseType.DEFERRED_MESSAGE_UPDATE)
     try:
-        if interaction.custom_id == _DELETE_USER_MODAL:
-            if typed == interaction.user.username.casefold():
-                await privacy.delete_user(interaction.user.id)
-                finished = ui.Container(
-                    ui.TextDisplay(f"### {catalog.text(locale, 'kit-privacy-deleting.title')}"),
-                    ui.TextDisplay(catalog.text(locale, "kit-privacy-deleting")),
-                    accent_color=bot.accent_color,
-                )
-            else:
-                refusal = "kit-privacy-delete.mismatch"
-        elif (guild := await _guild_if_owner(interaction)) is None:
-            refusal = "kit-privacy-server.owner-only"
-        elif typed == guild.name.casefold():
+        if guild is None:
+            await privacy.delete_user(interaction.user.id)
+            finished = ui.Container(
+                ui.TextDisplay(f"### {catalog.text(locale, 'kit-privacy-deleting.title')}"),
+                ui.TextDisplay(catalog.text(locale, "kit-privacy-deleting")),
+                accent_color=bot.accent_color,
+            )
+        else:
             deleted = await privacy.delete_guild(guild.id)
             if deleted:
                 what = f"{catalog.text(locale, 'kit-privacy-server-deleted', bot=bot.name)}\n"
@@ -295,19 +307,15 @@ async def _delete_after_the_typed_name(
                 ui.TextDisplay(what),
                 accent_color=bot.accent_color,
             )
-        else:
-            refusal = "kit-privacy-server.mismatch"
     except HubError as exc:
-        _LOGGER.warning("Could not delete after a typed confirmation: %s", exc)
-
-    if finished is not None:
-        await interaction.create_initial_response(hikari.ResponseType.MESSAGE_UPDATE, **ui.render(finished))
-    else:
-        await interaction.create_initial_response(
-            hikari.ResponseType.MESSAGE_CREATE,
-            **ui.render(_nothing_deleted(catalog, locale, refusal)),
-            flags=hikari.MessageFlag.EPHEMERAL,
+        # A call that ran out of time may still have been carried out, so the answer must not say nothing happened.
+        _LOGGER.warning("Could not confirm a deletion after a typed confirmation: %s", exc)
+        finished = ui.Container(
+            ui.TextDisplay(f"### {catalog.text(locale, 'kit-privacy-unconfirmed.title')}"),
+            ui.TextDisplay(catalog.text(locale, "kit-privacy-unconfirmed")),
+            accent_color=_RED,
         )
+    await interaction.edit_initial_response(**ui.render(finished))
 
 
 # Resolving risa's client while the extension loads would freeze the registry before the bot is done with it.

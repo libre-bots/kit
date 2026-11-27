@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from collections.abc import AsyncGenerator, Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from unittest.mock import AsyncMock, NonCallableMagicMock, create_autospec
 
 import hikari
@@ -170,12 +170,17 @@ class Bot:
         )
         return interaction
 
-    def answer(self) -> tuple[hikari.ResponseType, Screen, Any]:
+    def answer(self) -> tuple[hikari.ResponseType, Screen, hikari.UndefinedOr[hikari.MessageFlag]]:
         call = self.rest.create_interaction_response.await_args
         assert call is not None
-        return call.args[2], Screen(call.kwargs["components"]), call.kwargs.get("flags")
+        response_type, flags = call.args[2], call.kwargs.get("flags", hikari.UNDEFINED)
+        assert isinstance(response_type, hikari.ResponseType)
+        assert flags is hikari.UNDEFINED or isinstance(flags, hikari.MessageFlag)
+        return response_type, Screen(call.kwargs["components"]), flags
 
-    async def submit(self, modal: Modal, typed: str, person: Person) -> tuple[hikari.ResponseType, Screen, Any]:
+    async def submit(
+        self, modal: Modal, typed: str, person: Person, *, record_in: list[str] | None = None
+    ) -> tuple[Literal["edited", "private reply"], Screen]:
         interaction = create_autospec(hikari.ModalInteraction, instance=True)
         interaction.custom_id = modal.custom_id
         text_input = hikari.TextInputComponent(
@@ -186,13 +191,25 @@ class Bot:
         ]
         person.act(interaction, hikari.Locale.EN_US)
         response: AsyncMock = interaction.create_initial_response
+        edit: AsyncMock = interaction.edit_initial_response
+        if record_in is not None:
+
+            def record(response_type: hikari.ResponseType, *args: object, **kwargs: object) -> None:
+                record_in.append(f"answered {response_type.name}")
+
+            response.side_effect = record
         shard = create_autospec(hikari.api.GatewayShard, instance=True)
         await self.events.dispatch(
             hikari.ModalInteractionCreateEvent(shard=shard, interaction=interaction), return_tasks=True
         )
-        call = response.await_args
-        assert call is not None
-        return call.args[0], Screen(call.kwargs["components"]), call.kwargs.get("flags")
+        (first,) = response.await_args_list
+        if first.args[0] == hikari.ResponseType.DEFERRED_MESSAGE_UPDATE:
+            edited = edit.await_args
+            assert edited is not None
+            return "edited", Screen(edited.kwargs["components"])
+        assert first.args[0] == hikari.ResponseType.MESSAGE_CREATE
+        assert first.kwargs["flags"] == hikari.MessageFlag.EPHEMERAL
+        return "private reply", Screen(first.kwargs["components"])
 
 
 @pytest.fixture
@@ -271,15 +288,15 @@ async def test_deletes_my_data_once_i_type_my_username(bot: Bot, hub: tuple[Hub,
     assert modal.title == "Delete all your data"
     assert (modal.field["label"], modal.field["placeholder"]) == ("Type your username to confirm", "christopher")
 
-    response_type, done, _ = await bot.submit(modal, "  Christopher ", MEMBER)
+    answer, done = await bot.submit(modal, "  Christopher ", MEMBER, record_in=hub[1].log)
     await bot.privacy.wait_for_deletions()
 
-    assert response_type == hikari.ResponseType.MESSAGE_UPDATE
+    assert answer == "edited"
     assert done.texts == [
         "### Deletion started",
         "Your data is being deleted in the background. This can take a few minutes.",
     ]
-    assert hub[1].log[-2:] == [f"request deletion {USER}", f"delete user {USER}"]
+    assert hub[1].log[-3:] == ["answered DEFERRED_MESSAGE_UPDATE", f"request deletion {USER}", f"delete user {USER}"]
 
 
 async def test_keeps_my_data_when_the_username_does_not_match(bot: Bot, hub: tuple[Hub, FakePrivacy]) -> None:
@@ -288,9 +305,9 @@ async def test_keeps_my_data_when_the_username_does_not_match(bot: Bot, hub: tup
     _, warning, _ = bot.answer()
     modal = Modal(await bot.click(warning, "Delete everything", MEMBER))
 
-    response_type, refusal, flags = await bot.submit(modal, "someone-else", MEMBER)
+    answer, refusal = await bot.submit(modal, "someone-else", MEMBER)
 
-    assert (response_type, flags) == (hikari.ResponseType.MESSAGE_CREATE, hikari.MessageFlag.EPHEMERAL)
+    assert answer == "private reply"
     assert refusal.texts == ["### Nothing was deleted", "That is not your username, so nothing was deleted."]
     assert not [entry for entry in hub[1].log if entry.startswith(("request deletion", "delete user"))]
 
@@ -323,14 +340,14 @@ async def test_deletes_the_server_data_once_its_owner_types_its_name(bot: Bot, h
     assert modal.title == "Delete this server's data"
     assert (modal.field["label"], modal.field["placeholder"]) == ("Type the server name to confirm", "Star Gazers")
 
-    response_type, done, _ = await bot.submit(modal, "star gazers", OWNER_PERSON)
+    answer, done = await bot.submit(modal, "star gazers", OWNER_PERSON, record_in=hub[1].log)
 
-    assert response_type == hikari.ResponseType.MESSAGE_UPDATE
+    assert answer == "edited"
     assert done.texts == [
         "### Server data deleted",
         "LibreStarboard deleted:\n- 1 set of starboard settings\n- 342 starboard entries",
     ]
-    assert hub[1].log[-1] == f"delete guild {GUILD}"
+    assert hub[1].log[-2:] == ["answered DEFERRED_MESSAGE_UPDATE", f"delete guild {GUILD}"]
 
 
 async def test_lets_only_the_owner_delete_the_server_data(bot: Bot, hub: tuple[Hub, FakePrivacy]) -> None:
@@ -342,11 +359,11 @@ async def test_lets_only_the_owner_delete_the_server_data(bot: Bot, hub: tuple[H
 
     await bot.click(overview, "Delete this server's data", handed_over)
     _, after_click, flags = bot.answer()
-    _, after_submit, _ = await bot.submit(modal, "Star Gazers", handed_over)
+    answer, after_submit = await bot.submit(modal, "Star Gazers", handed_over)
 
     only_owner = ["### Nothing was deleted", "Only the server owner can delete this server's data."]
     assert (after_click.texts, flags) == (only_owner, hikari.MessageFlag.EPHEMERAL)
-    assert after_submit.texts == only_owner
+    assert (answer, after_submit.texts) == ("private reply", only_owner)
     assert f"delete guild {GUILD}" not in hub[1].log
 
 
@@ -362,19 +379,30 @@ async def test_names_a_category_the_bot_has_no_text_for(
     assert "privacy-category-starboard-extras" in caplog.text
 
 
-async def test_tells_that_nothing_was_deleted_when_the_hub_fails(bot: Bot, hub: tuple[Hub, FakePrivacy]) -> None:
-    overview = await bot.run_privacy(MEMBER)
-    await bot.click(overview, "Delete my data", MEMBER)
+@pytest.mark.parametrize(
+    ("person", "button", "confirm", "typed", "failing"),
+    [
+        (MEMBER, "Delete my data", "Delete everything", "christopher", "request deletion"),
+        (OWNER_PERSON, "Delete this server's data", "Delete server data", "Star Gazers", "delete guild"),
+    ],
+)
+async def test_does_not_claim_an_outcome_when_the_hub_fails(
+    bot: Bot, hub: tuple[Hub, FakePrivacy], person: Person, button: str, confirm: str, typed: str, failing: str
+) -> None:
+    overview = await bot.run_privacy(person)
+    await bot.click(overview, button, person)
     _, warning, _ = bot.answer()
-    modal = Modal(await bot.click(warning, "Delete everything", MEMBER))
-    hub[1].failing.add("request deletion")
+    modal = Modal(await bot.click(warning, confirm, person))
+    hub[1].failing.add(failing)
 
-    _, refusal, flags = await bot.submit(modal, "christopher", MEMBER)
+    answer, unconfirmed = await bot.submit(modal, typed, person)
 
-    assert flags == hikari.MessageFlag.EPHEMERAL
-    assert refusal.texts == [
-        "### Nothing was deleted",
-        "I can't reach my data at the moment. Try again in a minute.",
+    assert answer == "edited"
+    assert unconfirmed.accent == hikari.Color(0xE24B4A)
+    assert unconfirmed.texts == [
+        "### Deletion not confirmed",
+        "I could not reach my data to finish this, so I cannot tell whether it was deleted. "
+        "Run /privacy again in a minute to check.",
     ]
 
 

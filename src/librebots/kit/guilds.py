@@ -76,12 +76,17 @@ class GuildReporter:
             self._pending[guild_id] = report
 
     async def _report_again(self) -> None:
-        while self._pending:
-            guild_id, report = next(iter(self._pending.items()))
+        failed: set[int] = set()
+        while waiting := [guild_id for guild_id in self._pending if guild_id not in failed]:
+            guild_id = waiting[0]
+            report = self._pending[guild_id]
             try:
                 await report()
             except HubError as exc:
                 _LOGGER.warning("Could not report guild %s again after a sync: %s", guild_id, exc)
+                if self._pending.get(guild_id) is report:
+                    failed.add(guild_id)
+                continue
             if self._pending.get(guild_id) is report:
                 del self._pending[guild_id]
 

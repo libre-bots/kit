@@ -28,12 +28,14 @@ class FakeGuilds(guilds_pb2_grpc.GuildServiceServicer):
         self.log: list[str] = []
         self.joined: list[guilds_pb2.GuildJoinedRequest] = []
         self.synced: list[guilds_pb2.SyncGuildsRequest] = []
+        self.attempts: list[str] = []
         self.failing: set[str] = set()
         self.stalled: set[str] = set()
         self.stall_started = asyncio.Event()
         self._never = asyncio.Event()
 
     async def _check[Request, Response](self, name: str, context: Context[Request, Response]) -> None:
+        self.attempts.append(name)
         if name in self.failing:
             await context.abort(grpc.StatusCode.UNAVAILABLE, "hub is down")
         if name in self.stalled:
@@ -240,31 +242,29 @@ async def test_reports_changes_before_a_sync_only_once(hub: tuple[Hub, FakeGuild
     assert fake.log == [f"joined {guild}", f"sync {guild}"]
 
 
-async def test_logs_a_repeated_report_that_fails_and_keeps_the_sync_result(
+async def test_keeps_a_repeated_report_that_fails_for_the_next_sync(
     hub: tuple[Hub, FakeGuilds], caplog: pytest.LogCaptureFixture
 ) -> None:
     reporter, fake = GuildReporter(hub[0]), hub[1]
-    guild = on_shard(0)
-    result: list[SyncResult] = []
+    joined, left = on_shard(0, 1), on_shard(0, 2)
 
-    async def join_then_break_the_hub() -> AsyncIterator[None]:
-        await reporter.joined(guild, preferred_locale="en-US", member_count=3)
+    async def change_then_break_joins() -> AsyncIterator[None]:
+        await reporter.joined(joined, preferred_locale="en-US", member_count=3)
+        await reporter.left(left)
         fake.failing.add("joined")
         yield
 
-    listing = Listing([])
-    listing.proceed.clear()
-    sync = asyncio.create_task(reporter.sync(listing.rest, [0], 1))
     with caplog.at_level(logging.WARNING, logger="librebots.kit"):
-        async with asyncio.timeout(5):
-            await listing.started.wait()
-            async for _ in join_then_break_the_hub():
-                pass
-            listing.proceed.set()
-            result.append(await sync)
+        await run_with_paused_listing(reporter, Listing([]), change_then_break_joins())
 
-    assert result == [SyncResult(joined=1, left=2)]
-    assert str(guild) in caplog.text
+    assert fake.log == [f"joined {joined}", f"left {left}", "sync ", f"left {left}"]
+    assert fake.attempts.count("joined") == 2
+    assert str(joined) in caplog.text
+
+    fake.failing.clear()
+    assert await reporter.sync(Listing([]).rest, [0], 1) == SyncResult(joined=1, left=2)
+
+    assert fake.log[-2:] == ["sync ", f"joined {joined}"]
 
 
 async def test_runs_one_sync_at_a_time(hub: tuple[Hub, FakeGuilds]) -> None:

@@ -342,3 +342,23 @@ async def test_close_stops_running_deletions_and_leaves_them_pending(hub: tuple[
     assert removal.cancelled
     assert fake.pending == [USER]
     assert f"delete user {USER}" not in fake.log
+
+
+async def test_runs_the_removal_again_when_the_hub_failed_after_it(hub: tuple[Hub, FakePrivacy]) -> None:
+    fake = hub[1]
+    privacy = Privacy(hub[0], on_user_deletion=Removal(fake.log))
+    fake.failing.add("delete user")
+
+    async with asyncio.timeout(5):
+        await privacy.delete_user(USER)
+        await privacy.wait_for_deletions()
+        fake.failing.clear()
+        await privacy.resume_deletions()
+        await privacy.wait_for_deletions()
+
+    assert fake.log == [
+        f"request deletion {USER}",
+        f"remove from discord {USER}",
+        f"remove from discord {USER}",
+        f"delete user {USER}",
+    ]

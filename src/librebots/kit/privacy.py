@@ -28,8 +28,9 @@ class Privacy:
 
     Deleting a person's data runs in the background and survives a restart: the hub records the request first, then
     `on_user_deletion` removes what the bot keeps on Discord for that person, then the hub deletes the rest. A deletion
-    that fails stays pending, and `resume_deletions` starts it again. Every call to the hub gives up after `timeout`
-    seconds.
+    that fails stays pending, and `resume_deletions` starts it again. `on_user_deletion` can therefore run several
+    times for one person, also after an earlier run removed some or all of it, and must succeed when nothing is left
+    to remove. Every call to the hub gives up after `timeout` seconds.
     """
 
     def __init__(

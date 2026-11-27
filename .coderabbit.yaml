@@ -91,8 +91,9 @@ reviews:
         major version once 1.0 is out.
     - path: "src/librebots/kit/ext/**"
       instructions: >-
-        Lightbulb extensions are thin loaders around the functions next to them. Logic belongs in those functions,
-        so that it can be tested without Discord; flag logic that only exists inside a command or listener.
+        Extensions keep their logic in the command, listener or handler itself; a separate function only when
+        several of them share it. Their tests drive them through lightbulb's and risa's real paths with mocked
+        Discord objects; flag tests that reach Discord or the network.
     - path: "tests/**"
       instructions: >-
         Tests run against an in-process fake of the hub, never against Discord or the network. Flag sleeps used for

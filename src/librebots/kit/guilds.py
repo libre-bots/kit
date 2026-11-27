@@ -45,14 +45,16 @@ class GuildReporter:
     """Reports to the hub which guilds the shards of this process are in.
 
     Call `joined` and `left` for the gateway's join and leave events, and `sync` once the shards have started, after
-    a shard opens a new session and once a day. A join or leave reported while a sync runs is sent again after it, so
-    the older guild list the sync read cannot undo it.
+    a shard opens a new session and once a day. A join or leave reported while a sync runs is sent again after the
+    next sync that succeeds, so the older guild list a sync read cannot undo it. Every call to the hub gives up after
+    `timeout` seconds.
     """
 
-    def __init__(self, hub: Hub) -> None:
+    def __init__(self, hub: Hub, *, timeout: float = 30) -> None:
         self._hub = hub
+        self._timeout = timeout
         self._sync_lock = asyncio.Lock()
-        self._during_sync: dict[int, Callable[[], Awaitable[object]]] = {}
+        self._pending: dict[int, Callable[[], Awaitable[object]]] = {}
 
     async def joined(self, guild_id: int, *, preferred_locale: str, member_count: int | None) -> str:
         """Report that the bot joined a guild and return the guild's language. Raises `HubError` if the hub fails."""
@@ -73,44 +75,42 @@ class GuildReporter:
         """
         shards = frozenset(shard_ids)
         async with self._sync_lock:
-            try:
-                guilds = [
-                    SyncedGuild(guild_id=guild.id, member_count=guild.approximate_member_count)
-                    async for guild in rest.fetch_my_guilds()
-                    if (guild.id >> 22) % shard_count in shards
-                ]
-                request = SyncGuildsRequest(
-                    shards=ShardSet(shard_ids=sorted(shards), shard_count=shard_count), guilds=guilds
-                )
-                response = await _call("SyncGuilds", self._hub.guilds.SyncGuilds(request))
-            except BaseException:
-                self._during_sync.clear()
-                raise
+            guilds = [
+                SyncedGuild(guild_id=guild.id, member_count=guild.approximate_member_count)
+                async for guild in rest.fetch_my_guilds()
+                if (guild.id >> 22) % shard_count in shards
+            ]
+            request = SyncGuildsRequest(
+                shards=ShardSet(shard_ids=sorted(shards), shard_count=shard_count), guilds=guilds
+            )
+            response = await _call("SyncGuilds", self._hub.guilds.SyncGuilds(request, timeout=self._timeout))
             await self._report_again()
         return SyncResult(joined=response.joined, left=response.left)
 
     def _remember(self, guild_id: int, report: Callable[[], Awaitable[object]]) -> None:
-        if self._sync_lock.locked():
-            self._during_sync[guild_id] = report
+        if self._sync_lock.locked() or guild_id in self._pending:
+            self._pending[guild_id] = report
 
     async def _report_again(self) -> None:
-        while self._during_sync:
-            changes, self._during_sync = self._during_sync, {}
-            for guild_id, report in changes.items():
-                try:
-                    await report()
-                except HubError as exc:
-                    _LOGGER.warning("Could not report guild %s again after a sync: %s", guild_id, exc)
+        while self._pending:
+            guild_id, report = next(iter(self._pending.items()))
+            try:
+                await report()
+            except HubError as exc:
+                _LOGGER.warning("Could not report guild %s again after a sync: %s", guild_id, exc)
+            if self._pending.get(guild_id) is report:
+                del self._pending[guild_id]
 
     async def _report_join(self, guild_id: int, preferred_locale: str, member_count: int | None) -> str:
         request = GuildJoinedRequest(
             guild_id=guild_id, preferred_locale=preferred_locale, member_count=member_count or 0
         )
-        response = await _call("GuildJoined", self._hub.guilds.GuildJoined(request))
+        response = await _call("GuildJoined", self._hub.guilds.GuildJoined(request, timeout=self._timeout))
         return response.settings.locale
 
     async def _report_leave(self, guild_id: int) -> None:
-        await _call("GuildLeft", self._hub.guilds.GuildLeft(GuildLeftRequest(guild_id=guild_id)))
+        request = GuildLeftRequest(guild_id=guild_id)
+        await _call("GuildLeft", self._hub.guilds.GuildLeft(request, timeout=self._timeout))
 
 
 async def _call[T](method: str, call: Awaitable[T]) -> T:

@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import AsyncGenerator, Callable, Coroutine
-from typing import Any
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from unittest.mock import create_autospec
 
 import hikari
@@ -18,7 +17,7 @@ from librebots.kit.ext import guilds
 
 EXTENSION = "librebots.kit.ext.guilds"
 
-type Listener = Callable[[Any], Coroutine[Any, Any, None]]
+type Listener[E: hikari.Event] = Callable[[E], Awaitable[None]]
 
 
 @pytest.fixture
@@ -34,7 +33,7 @@ async def running() -> AsyncGenerator[tuple[hikari.GatewayBot, lightbulb.Client,
         await client.unload_extensions(EXTENSION)
 
 
-def listener(bot: hikari.GatewayBot, event_type: type[hikari.Event]) -> Listener:
+def listener[E: hikari.Event](bot: hikari.GatewayBot, event_type: type[E]) -> Listener[E]:
     (callback,) = bot.event_manager.get_listeners(event_type)
     return callback
 
@@ -166,7 +165,7 @@ async def test_syncs_every_own_shard_once_a_day(
     provide(client, hikari.api.RESTClient, guilds_on_every_shard().rest)
 
     async with client.di.enter_context(lightbulb.di.Contexts.DEFAULT):
-        await lightbulb.di.with_di(guilds._sync_own_shards)()  # pyright: ignore[reportPrivateUsage]
+        await guilds.sync_own_shards()
 
     request = fake.synced[0]
     assert request.shards == ShardSet(shard_ids=[0, 2], shard_count=4)

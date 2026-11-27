@@ -14,7 +14,7 @@ import lightbulb
 from librebots.kit.guilds import GuildReporter
 from librebots.kit.hub import HubError
 
-__all__ = ["loader"]
+__all__ = ["loader", "sync_own_shards"]
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -47,17 +47,21 @@ async def _sync_shard(
     await _sync(reporter, rest, [event.shard.id], event.shard.shard_count)
 
 
-async def _sync_own_shards(
+@lightbulb.di.with_di
+async def sync_own_shards(
     bot: hikari.GatewayBot = lightbulb.di.INJECTED,
     reporter: GuildReporter = lightbulb.di.INJECTED,
     rest: hikari.api.RESTClient = lightbulb.di.INJECTED,
 ) -> None:
+    """Sync the guilds of every shard this process runs, as the extension does daily at 04:00 UTC.
+
+    Takes its arguments from lightbulb's dependency injection, so call it from a command, listener or task.
+    """
     await _sync(reporter, rest, bot.shards.keys(), bot.shard_count)
 
 
-# Registered without the decorator so the tests can call the function itself.
 # With lightbulb's default of one failure, a single error would stop the daily sync until the next restart.
-loader.task(lightbulb.crontrigger("0 4 * * *"), max_failures=-1)(_sync_own_shards)
+loader.task(lightbulb.crontrigger("0 4 * * *"), max_failures=-1)(sync_own_shards)
 
 
 async def _sync(

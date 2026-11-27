@@ -82,10 +82,13 @@ reviews:
         The shared toolbox every Libre Bot uses, published as librebots-kit. It is not a framework: nothing may run
         at import time or in the background unless the bot calls it or loads an extension by name. Public functions
         and classes are typed and have short docstrings. User-facing text comes from the Fluent catalogs, never from
-        hard-coded strings, and every key exists in every language. Replies are built with the shared UI helpers so
-        all bots look the same. A process acts only for the guilds of its own shards; flag code that assumes one
-        process sees every guild. Only Discord ids are stored or sent to the hub; flag logging or storing message
-        contents, user names or tokens. Changes to public names need a major version once 1.0 is out.
+        hard-coded strings, and every key exists in every language. Replies are Components V2 containers built with
+        risa directly, with no kit helper in between, and look like every other bot's: an accent bar in the bot's
+        colour (#E24B4A for errors), a ### title, one or two sentences, at most one row of buttons at the bottom, and
+        set-up replies, errors and confirmations visible to the caller only. A process acts only for the guilds of
+        its own shards; flag code that assumes one process sees every guild. Only Discord ids are stored or sent to
+        the hub; flag logging or storing message contents, user names or tokens. Changes to public names need a
+        major version once 1.0 is out.
     - path: "src/librebots/kit/ext/**"
       instructions: >-
         Lightbulb extensions are thin loaders around the functions next to them. Logic belongs in those functions,

@@ -1,8 +1,11 @@
+from __future__ import annotations
+
 import logging
 import socket
-from collections.abc import AsyncGenerator, Mapping
+from collections.abc import AsyncGenerator, Awaitable
 from importlib.metadata import version
 from pathlib import Path
+from unittest.mock import create_autospec
 
 import grpc
 import grpc.aio
@@ -25,7 +28,7 @@ class FakeInfo(info_pb2_grpc.InfoServiceServicer):
     async def GetInfo(
         self,
         request: info_pb2.GetInfoRequest,
-        context: grpc.aio.ServicerContext[info_pb2.GetInfoRequest, info_pb2.GetInfoResponse],
+        context: grpc.aio.ServicerContext[info_pb2.GetInfoRequest, Awaitable[info_pb2.GetInfoResponse]],
     ) -> info_pb2.GetInfoResponse:
         self.seen = dict(context.invocation_metadata() or ())
         if self.seen.get("authorization") != f"Bearer {TOKEN}":
@@ -33,10 +36,11 @@ class FakeInfo(info_pb2_grpc.InfoServiceServicer):
         return info_pb2.GetInfoResponse(version=self.version)
 
 
-class FakeApp:
-    def __init__(self, shards: Mapping[int, object], shard_count: int) -> None:
-        self.shards = shards
-        self.shard_count = shard_count
+def sharded_app(shard_ids: list[int], shard_count: int) -> hikari.ShardAware:
+    app = create_autospec(hikari.GatewayBot, instance=True)
+    app.shards = {shard_id: create_autospec(hikari.api.GatewayShard, instance=True) for shard_id in shard_ids}
+    app.shard_count = shard_count
+    return app
 
 
 @pytest.fixture
@@ -94,7 +98,7 @@ async def test_close_shuts_the_channel_down(fake_hub: tuple[str, FakeInfo]) -> N
 async def test_sends_the_shard_label_of_the_app(fake_hub: tuple[str, FakeInfo]) -> None:
     address, info = fake_hub
 
-    hub = await connect_hub(config(address), shards=FakeApp({2: object(), 0: object()}, 4))
+    hub = await connect_hub(config(address), shards=sharded_app([2, 0], 4))
     await hub.close()
 
     assert info.seen["libre-shards"] == "0,2/4"
@@ -112,9 +116,7 @@ async def test_sends_the_configured_shards_without_an_app(fake_hub: tuple[str, F
 async def test_prefers_the_shards_of_the_app_to_the_configured_ones(fake_hub: tuple[str, FakeInfo]) -> None:
     address, info = fake_hub
 
-    hub = await connect_hub(
-        config(address, SHARD_IDS="2", SHARD_COUNT="4"), shards=FakeApp({0: object(), 1: object()}, 2)
-    )
+    hub = await connect_hub(config(address, SHARD_IDS="2", SHARD_COUNT="4"), shards=sharded_app([0, 1], 2))
     await hub.close()
 
     assert info.seen["libre-shards"] == "0,1/2"

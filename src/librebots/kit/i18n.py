@@ -13,9 +13,12 @@ from fluent.runtime.resolver import Pattern
 from fluent.syntax import FluentParser, ast
 from fluent.syntax.visitor import Visitor
 
-__all__ = ["Catalog", "CatalogError"]
+__all__ = ["LOCALES", "Catalog", "CatalogError"]
 
 _LOGGER = logging.getLogger(__name__)
+
+LOCALES = Path(__file__).parent / "locales"
+"""kit's own texts. A bot loads them before its own: `Catalog.load(LOCALES, "locales")`."""
 _ENGLISH = "en-US"
 
 

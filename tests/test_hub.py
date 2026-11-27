@@ -11,9 +11,11 @@ import grpc
 import grpc.aio
 import hikari
 import pytest
+from google.rpc import error_details_pb2, status_pb2  # pyright: ignore[reportMissingTypeStubs]
+from hub_server import serving
 from librebots.hub.v1 import info_pb2, info_pb2_grpc
 
-from librebots.kit import Config, HubError, connect_hub
+from librebots.kit import Config, HubError, HubRequestError, HubUnavailableError, call_hub, connect_hub
 
 TOKEN = "hub-token"
 CLIENT = version("librebots-hub")
@@ -34,6 +36,33 @@ class FakeInfo(info_pb2_grpc.InfoServiceServicer):
         if self.seen.get("authorization") != f"Bearer {TOKEN}":
             await context.abort(grpc.StatusCode.UNAUTHENTICATED, "missing or unknown token")
         return info_pb2.GetInfoResponse(version=self.version)
+
+
+class FailingInfo(info_pb2_grpc.InfoServiceServicer):
+    def __init__(self, code: grpc.StatusCode, reason: str | None = None) -> None:
+        self.code = code
+        self.reason = reason
+
+    async def GetInfo(
+        self,
+        request: info_pb2.GetInfoRequest,
+        context: grpc.aio.ServicerContext[info_pb2.GetInfoRequest, Awaitable[info_pb2.GetInfoResponse]],
+    ) -> info_pb2.GetInfoResponse:
+        await context.abort(self.code, "it broke", trailing_metadata=self._details())
+        raise AssertionError
+
+    def _details(self) -> tuple[tuple[str, bytes], ...]:
+        if self.reason is None:
+            return ()
+        status = status_pb2.Status(code=self.code.value[0], message="it broke")
+        status.details.add().Pack(error_details_pb2.ErrorInfo(reason=self.reason, domain="hub.libre-bots"))
+        return (("grpc-status-details-bin", status.SerializeToString()),)
+
+
+async def get_info_failing_with(code: grpc.StatusCode, reason: str | None = None) -> None:
+    info = FailingInfo(code, reason)
+    async with serving(lambda server: info_pb2_grpc.add_InfoServiceServicer_to_server(info, server)) as hub:
+        await call_hub("GetInfo", info_pb2_grpc.InfoServiceStub(hub.channel).GetInfo(info_pb2.GetInfoRequest()))
 
 
 def sharded_app(shard_ids: list[int], shard_count: int) -> hikari.ShardAware:
@@ -134,22 +163,26 @@ async def test_sends_no_shard_label_before_the_shards_start(fake_hub: tuple[str,
 
 
 async def test_rejects_a_wrong_token(fake_hub: tuple[str, FakeInfo]) -> None:
-    with pytest.raises(HubError, match="HUB_TOKEN"):
+    with pytest.raises(HubRequestError, match="HUB_TOKEN") as caught:
         await connect_hub(config(fake_hub[0], HUB_TOKEN="wrong"))
+
+    assert caught.value.code == grpc.StatusCode.UNAUTHENTICATED
 
 
 async def test_gives_up_when_the_hub_does_not_answer() -> None:
     address = unused_address()
 
-    with pytest.raises(HubError, match=f"{address}.*0.2 seconds"):
+    with pytest.raises(HubUnavailableError, match=f"{address}.*0.2 seconds"):
         await connect_hub(config(address), timeout=0.2)
 
 
 async def test_reports_an_unreadable_ca_file(tmp_path: Path) -> None:
     values = {"HUB_TLS": "true", "HUB_CA_FILE": str(tmp_path / "missing.pem")}
 
-    with pytest.raises(HubError, match="HUB_CA_FILE"):
+    with pytest.raises(HubError, match="HUB_CA_FILE") as caught:
         await connect_hub(config(unused_address(), **values), timeout=0.2)
+
+    assert caught.type is HubError
 
 
 @pytest.mark.parametrize(
@@ -180,8 +213,10 @@ async def test_rejects_a_hub_with_an_older_minor_version(fake_hub: tuple[str, Fa
     address, info = fake_hub
     info.version = f"{CLIENT_MAJOR}.{CLIENT_MINOR - 1}.99" if CLIENT_MINOR else f"{CLIENT_MAJOR - 1}.99.0"
 
-    with pytest.raises(HubError, match=info.version):
+    with pytest.raises(HubError, match=info.version) as caught:
         await connect_hub(config(address))
+
+    assert caught.type is HubError
 
 
 async def test_warns_about_a_hub_without_a_version(
@@ -202,5 +237,40 @@ async def test_rejects_an_unknown_hub_version(fake_hub: tuple[str, FakeInfo]) ->
     address, info = fake_hub
     info.version = "banana"
 
-    with pytest.raises(HubError, match="banana"):
+    with pytest.raises(HubError, match="banana") as caught:
         await connect_hub(config(address))
+
+    assert caught.type is HubError
+
+
+async def test_call_returns_the_response(fake_hub: tuple[str, FakeInfo]) -> None:
+    hub = await connect_hub(config(fake_hub[0]))
+    stub = info_pb2_grpc.InfoServiceStub(hub.channel)
+    try:
+        response = await call_hub("GetInfo", stub.GetInfo(info_pb2.GetInfoRequest()))
+    finally:
+        await hub.close()
+
+    assert response.version == CLIENT
+
+
+@pytest.mark.parametrize("code", [grpc.StatusCode.UNAVAILABLE, grpc.StatusCode.DEADLINE_EXCEEDED])
+async def test_call_reports_a_hub_it_cannot_reach(code: grpc.StatusCode) -> None:
+    with pytest.raises(HubUnavailableError, match=f"GetInfo failed with {code.name}: it broke"):
+        await get_info_failing_with(code)
+
+
+async def test_call_reports_the_code_and_reason_of_a_refused_call() -> None:
+    with pytest.raises(HubRequestError, match="GetInfo failed with NOT_FOUND") as caught:
+        await get_info_failing_with(grpc.StatusCode.NOT_FOUND, "REASON_GUILD_NOT_REGISTERED")
+
+    assert caught.value.code == grpc.StatusCode.NOT_FOUND
+    assert caught.value.reason == "REASON_GUILD_NOT_REGISTERED"
+
+
+async def test_call_reports_no_reason_when_the_hub_sends_none() -> None:
+    with pytest.raises(HubRequestError) as caught:
+        await get_info_failing_with(grpc.StatusCode.INTERNAL)
+
+    assert caught.value.code == grpc.StatusCode.INTERNAL
+    assert caught.value.reason is None

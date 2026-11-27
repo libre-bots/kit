@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from collections.abc import Callable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from importlib.metadata import version as installed_version
 from pathlib import Path
 
@@ -11,7 +11,7 @@ import grpc
 import grpc.aio
 import hikari
 import msgspec
-from librebots.hub import connect
+from librebots.hub import connect, reason_of
 from librebots.hub.v1.guilds_pb2_grpc import GuildServiceStub
 from librebots.hub.v1.info_pb2 import GetInfoRequest
 from librebots.hub.v1.info_pb2_grpc import InfoServiceStub
@@ -20,14 +20,31 @@ from librebots.hub.v1.stats_pb2_grpc import StatsServiceStub
 
 from librebots.kit.config import Config
 
-__all__ = ["Hub", "HubError", "connect_hub"]
+__all__ = ["Hub", "HubError", "HubRequestError", "HubUnavailableError", "call_hub", "connect_hub"]
 
 _LOGGER = logging.getLogger(__name__)
 _VERSION = re.compile(r"(\d+)\.(\d+)\.\d+")
+_UNAVAILABLE = frozenset({grpc.StatusCode.UNAVAILABLE, grpc.StatusCode.DEADLINE_EXCEEDED})
 
 
 class HubError(Exception):
-    """The hub could not be reached, rejected the bot or is too old for it."""
+    """Something went wrong with the hub. The message says what, for the log."""
+
+
+class HubUnavailableError(HubError):
+    """The hub could not be reached or did not answer in time. Trying again later can work."""
+
+
+class HubRequestError(HubError):
+    """The hub answered a call with an error.
+
+    `reason` is the name of the hub's reason code, such as `"REASON_GUILD_NOT_REGISTERED"`, or `None` if it sent none.
+    """
+
+    def __init__(self, message: str, *, code: grpc.StatusCode, reason: str | None) -> None:
+        super().__init__(message)
+        self.code: grpc.StatusCode = code
+        self.reason: str | None = reason
 
 
 class Hub(msgspec.Struct, frozen=True, kw_only=True):
@@ -116,7 +133,7 @@ async def _hub_version(channel: grpc.aio.Channel, address: str, timeout: float) 
                 message = f"The hub at {address} rejected HUB_TOKEN"
             case code:
                 message = f"The hub at {address} failed with {code.name}: {exc.details()}"
-        raise HubError(message) from exc
+        raise _error(message, exc) from exc
     return response.version
 
 
@@ -139,3 +156,21 @@ def _major_minor(text: str) -> tuple[int, int] | None:
     if match is None:
         return None
     return int(match[1]), int(match[2])
+
+
+async def call_hub[T](method: str, request: Awaitable[T]) -> T:
+    """Await a call to the hub and raise the matching `HubError` if it fails.
+
+    For calls to a bot's own service: `await call_hub("ReportStars", stub.ReportStars(request, timeout=10))`.
+    """
+    try:
+        return await request
+    except grpc.aio.AioRpcError as exc:
+        raise _error(f"{method} failed with {exc.code().name}: {exc.details()}", exc) from exc
+
+
+def _error(message: str, exc: grpc.aio.AioRpcError) -> HubError:
+    code = exc.code()
+    if code in _UNAVAILABLE:
+        return HubUnavailableError(message)
+    return HubRequestError(message, code=code, reason=reason_of(exc))

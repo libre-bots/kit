@@ -15,8 +15,7 @@ from librebots.hub.v1.privacy_pb2 import (
     RequestUserDeletionRequest,
 )
 
-from librebots.kit._rpc import call
-from librebots.kit.hub import Hub
+from librebots.kit.hub import Hub, call_hub
 
 __all__ = ["Privacy"]
 
@@ -48,13 +47,13 @@ class Privacy:
     async def count_user(self, user_id: int) -> dict[str, int]:
         """Return what the bot stores about a person, counted by category. Raises `HubError` if the hub fails."""
         request = CountUserDataRequest(user_id=user_id)
-        response = await call("CountUserData", self._hub.privacy.CountUserData(request, timeout=self._timeout))
+        response = await call_hub("CountUserData", self._hub.privacy.CountUserData(request, timeout=self._timeout))
         return _by_category(response.categories)
 
     async def export_user(self, user_id: int) -> str:
         """Return everything the bot stores about a person as a JSON document. Raises `HubError` if the hub fails."""
         request = ExportUserDataRequest(user_id=user_id)
-        response = await call("ExportUserData", self._hub.privacy.ExportUserData(request, timeout=self._timeout))
+        response = await call_hub("ExportUserData", self._hub.privacy.ExportUserData(request, timeout=self._timeout))
         return response.json
 
     async def delete_user(self, user_id: int) -> None:
@@ -63,7 +62,7 @@ class Privacy:
         Returns once the hub has recorded the request. Raises `HubError` if it cannot.
         """
         request = RequestUserDeletionRequest(user_id=user_id)
-        await call("RequestUserDeletion", self._hub.privacy.RequestUserDeletion(request, timeout=self._timeout))
+        await call_hub("RequestUserDeletion", self._hub.privacy.RequestUserDeletion(request, timeout=self._timeout))
         self._start(user_id)
 
     async def resume_deletions(self) -> int:
@@ -72,7 +71,7 @@ class Privacy:
         Raises `HubError` if the hub fails.
         """
         request = ListPendingUserDeletionsRequest()
-        response = await call(
+        response = await call_hub(
             "ListPendingUserDeletions", self._hub.privacy.ListPendingUserDeletions(request, timeout=self._timeout)
         )
         return sum(self._start(deletion.user_id) for deletion in response.deletions)
@@ -85,13 +84,13 @@ class Privacy:
     async def count_guild(self, guild_id: int) -> dict[str, int]:
         """Return what the bot stores about a guild, counted by category. Raises `HubError` if the hub fails."""
         request = CountGuildDataRequest(guild_id=guild_id)
-        response = await call("CountGuildData", self._hub.privacy.CountGuildData(request, timeout=self._timeout))
+        response = await call_hub("CountGuildData", self._hub.privacy.CountGuildData(request, timeout=self._timeout))
         return _by_category(response.categories)
 
     async def delete_guild(self, guild_id: int) -> dict[str, int]:
         """Delete what the bot stores about a guild and return what was deleted. Raises `HubError` if the hub fails."""
         request = DeleteGuildDataRequest(guild_id=guild_id)
-        response = await call("DeleteGuildData", self._hub.privacy.DeleteGuildData(request, timeout=self._timeout))
+        response = await call_hub("DeleteGuildData", self._hub.privacy.DeleteGuildData(request, timeout=self._timeout))
         return _by_category(response.deleted)
 
     async def close(self) -> None:
@@ -118,7 +117,7 @@ class Privacy:
             if self._on_user_deletion is not None:
                 await self._on_user_deletion(user_id)
             request = DeleteUserDataRequest(user_id=user_id)
-            await call("DeleteUserData", self._hub.privacy.DeleteUserData(request, timeout=self._timeout))
+            await call_hub("DeleteUserData", self._hub.privacy.DeleteUserData(request, timeout=self._timeout))
         except Exception:
             _LOGGER.exception("Deleting the data of user %s failed; it stays pending and is tried again later", user_id)
 

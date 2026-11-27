@@ -35,37 +35,43 @@ loader = lightbulb.Loader()
 
 
 @loader.error_handler(priority=_PRIORITY)
-async def _answer_command(
+async def _answer_failed_command(
     exc: lightbulb.exceptions.ExecutionPipelineFailedException, catalog: Catalog = lightbulb.di.INJECTED
 ) -> bool:
     ctx = exc.context
-    layout = _reply(catalog, ctx.interaction.locale, exc.causes, f"Command /{ctx.command_data.qualified_name}")
+    layout = _build_error_reply(
+        catalog, ctx.interaction.locale, exc.causes, f"Command /{ctx.command_data.qualified_name}"
+    )
     try:
         await ctx.respond(**ui.render(layout), ephemeral=True)
     except hikari.HTTPError as error:
-        _LOGGER.warning("Could not tell the caller that a command failed: %s", _without_tokens(str(error)))
+        _LOGGER.warning("Could not tell the caller that a command failed: %s", _redact_tokens(str(error)))
     return True
 
 
-async def _answer_click(
+async def _answer_failed_click(
     pipeline: risa.ExecutionPipeline, ctx: risa.ComponentContext, catalog: Catalog = risa.INJECTED
 ) -> bool:
-    layout = _reply(catalog, ctx.interaction.locale, [failure.error for failure in pipeline.failures], "A click")
+    layout = _build_error_reply(
+        catalog, ctx.interaction.locale, [failure.error for failure in pipeline.failures], "A click"
+    )
     try:
         await ctx.respond(**ui.render(layout), ephemeral=True)
     except hikari.HTTPError as error:
-        _LOGGER.warning("Could not tell the clicker that a click failed: %s", _without_tokens(str(error)))
+        _LOGGER.warning("Could not tell the clicker that a click failed: %s", _redact_tokens(str(error)))
     return True
 
 
 # Resolving risa's client while the extension loads would freeze the registry before the bot is done with it.
 @loader.listener(hikari.StartedEvent)
-async def _answer_clicks(_: hikari.StartedEvent, views: risa.Client = lightbulb.di.INJECTED) -> None:
-    views.error_handler(_answer_click, priority=_PRIORITY)
+async def _register_click_fallback(_: hikari.StartedEvent, views: risa.Client = lightbulb.di.INJECTED) -> None:
+    views.error_handler(_answer_failed_click, priority=_PRIORITY)
 
 
-def _reply(catalog: Catalog, locale: hikari.Locale | str, errors: Sequence[Exception], failed: str) -> ui.Container:
-    key, reference = _classify(errors, failed)
+def _build_error_reply(
+    catalog: Catalog, locale: hikari.Locale | str, errors: Sequence[Exception], failed: str
+) -> ui.Container:
+    key, reference = _log_and_pick_text(errors, failed)
     text = catalog.text(locale, key) if reference is None else catalog.text(locale, key, reference=reference)
     return ui.Container(
         ui.TextDisplay(f"### {catalog.text(locale, f'{key}.title')}"),
@@ -74,21 +80,21 @@ def _reply(catalog: Catalog, locale: hikari.Locale | str, errors: Sequence[Excep
     )
 
 
-def _classify(errors: Sequence[Exception], failed: str) -> tuple[str, str | None]:
+def _log_and_pick_text(errors: Sequence[Exception], failed: str) -> tuple[str, str | None]:
     for error in errors:
         if isinstance(error, HubUnavailableError):
-            _LOGGER.warning("%s failed because the hub is unavailable: %s", failed, _without_tokens(str(error)))
+            _LOGGER.warning("%s failed because the hub is unavailable: %s", failed, _redact_tokens(str(error)))
             return "kit-error-hub", None
     for error in errors:
         if isinstance(error, hikari.ForbiddenError):
-            _LOGGER.info("%s failed for a missing permission: %s", failed, _without_tokens(str(error)))
+            _LOGGER.info("%s failed for a missing permission: %s", failed, _redact_tokens(str(error)))
             return "kit-error-forbidden", None
     reference = secrets.token_hex(3)
     for error in errors:
-        described = _without_tokens("".join(traceback.format_exception(error)).rstrip())
+        described = _redact_tokens("".join(traceback.format_exception(error)).rstrip())
         _LOGGER.error("%s failed, reference %s\n%s", failed, reference, described)
     return "kit-error-unknown", reference
 
 
-def _without_tokens(text: str) -> str:
+def _redact_tokens(text: str) -> str:
     return _TOKEN_IN_URL.sub(r"\1***", text)

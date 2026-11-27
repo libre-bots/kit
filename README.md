@@ -1,7 +1,7 @@
 # Libre Bots kit
 
-The functions and lightbulb extensions every Libre Bot shares: configuration, the hub connection, translations, UI
-helpers, guild reporting and privacy. It is a toolbox, not a framework. A bot calls it from its own start-up code,
+The functions and lightbulb extensions every Libre Bot shares: configuration, the hub connection, translations,
+guild reporting and privacy. It is a toolbox, not a framework. A bot calls it from its own start-up code,
 and nothing in it runs unless the bot names it.
 
 ```sh

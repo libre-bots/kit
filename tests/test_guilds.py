@@ -9,10 +9,8 @@ import grpc
 import grpc.aio
 import hikari
 import pytest
+from hub_server import serving
 from librebots.hub.v1 import guilds_pb2, guilds_pb2_grpc
-from librebots.hub.v1.guilds_pb2_grpc import GuildServiceStub
-from librebots.hub.v1.privacy_pb2_grpc import PrivacyServiceStub
-from librebots.hub.v1.stats_pb2_grpc import StatsServiceStub
 
 from librebots.kit import GuildReporter, Hub, HubError, SyncResult
 
@@ -100,25 +98,8 @@ class Listing:
 async def hub() -> AsyncGenerator[tuple[Hub, FakeGuilds]]:
     # The fake answers only the calls guild reporting makes.
     fake = FakeGuilds()  # pyright: ignore[reportAbstractUsage]
-    server = grpc.aio.server()
-    guilds_pb2_grpc.add_GuildServiceServicer_to_server(fake, server)
-    port = server.add_insecure_port("127.0.0.1:0")
-    await server.start()
-    channel = grpc.aio.insecure_channel(f"127.0.0.1:{port}")
-    try:
-        yield (
-            Hub(
-                channel=channel,
-                version="test",
-                guilds=GuildServiceStub(channel),
-                privacy=PrivacyServiceStub(channel),
-                stats=StatsServiceStub(channel),
-            ),
-            fake,
-        )
-    finally:
-        await channel.close()
-        await server.stop(0)
+    async with serving(lambda server: guilds_pb2_grpc.add_GuildServiceServicer_to_server(fake, server)) as hub:
+        yield hub, fake
 
 
 async def test_reports_a_join_and_returns_the_language(hub: tuple[Hub, FakeGuilds]) -> None:

@@ -188,7 +188,7 @@ class Bot:
         response: AsyncMock = interaction.create_initial_response
         shard = create_autospec(hikari.api.GatewayShard, instance=True)
         await self.events.dispatch(
-            hikari.InteractionCreateEvent(shard=shard, interaction=interaction), return_tasks=True
+            hikari.ModalInteractionCreateEvent(shard=shard, interaction=interaction), return_tasks=True
         )
         call = response.await_args
         assert call is not None

@@ -44,7 +44,7 @@ class _PrivacyOverview(risa.View):
 
     def render(self) -> ui.Layout:
         if self.catalog is None or self.config is None or self.bot is None:
-            raise RuntimeError("the overview renders only as _overview() builds it")
+            raise RuntimeError("the overview renders only with its texts, config and bot info set")
         catalog, locale = self.catalog, self.locale
         if self.stored:
             stored = f"{catalog.text(locale, 'kit-privacy-overview.stored')}\n{_listed(catalog, locale, self.stored)}"
@@ -211,7 +211,14 @@ class _PrivacyOverview(risa.View):
         config: Config = risa.INJECTED,
         bot: BotInfo = risa.INJECTED,
     ) -> None:
-        overview = await _overview(ctx.interaction, privacy, catalog, config, bot)
+        overview = _PrivacyOverview(
+            locale=str(ctx.interaction.locale),
+            stored=await privacy.count_user(ctx.interaction.user.id),
+            server_owner=await _guild_if_owner(ctx.interaction) is not None,
+            catalog=catalog,
+            config=config,
+            bot=bot,
+        )
         await ctx.edit(overview.render())
 
 
@@ -233,20 +240,25 @@ class _PrivacyCommand(
         config: Config = lightbulb.di.INJECTED,
         bot: BotInfo = lightbulb.di.INJECTED,
     ) -> None:
-        overview = await _overview(ctx.interaction, privacy, catalog, config, bot)
+        overview = _PrivacyOverview(
+            locale=str(ctx.interaction.locale),
+            stored=await privacy.count_user(ctx.interaction.user.id),
+            server_owner=await _guild_if_owner(ctx.interaction) is not None,
+            catalog=catalog,
+            config=config,
+            bot=bot,
+        )
         await ctx.respond(**await views.build(overview), ephemeral=True)
 
 
-@loader.listener(hikari.InteractionCreateEvent)
+@loader.listener(hikari.ModalInteractionCreateEvent)
 async def _delete_after_the_typed_name(
-    event: hikari.InteractionCreateEvent,
+    event: hikari.ModalInteractionCreateEvent,
     privacy: Privacy = lightbulb.di.INJECTED,
     catalog: Catalog = lightbulb.di.INJECTED,
     bot: BotInfo = lightbulb.di.INJECTED,
 ) -> None:
     interaction = event.interaction
-    if not isinstance(interaction, hikari.ModalInteraction):
-        return
     if interaction.custom_id not in {_DELETE_USER_MODAL, _DELETE_SERVER_MODAL}:
         return
     locale = interaction.locale
@@ -321,23 +333,6 @@ async def _resume_pending_deletions(privacy: Privacy = lightbulb.di.INJECTED) ->
         return
     if started:
         _LOGGER.info("Resumed %d pending deletions", started)
-
-
-async def _overview(
-    interaction: hikari.CommandInteraction | hikari.ComponentInteraction,
-    privacy: Privacy,
-    catalog: Catalog,
-    config: Config,
-    bot: BotInfo,
-) -> _PrivacyOverview:
-    return _PrivacyOverview(
-        locale=str(interaction.locale),
-        stored=await privacy.count_user(interaction.user.id),
-        server_owner=await _guild_if_owner(interaction) is not None,
-        catalog=catalog,
-        config=config,
-        bot=bot,
-    )
 
 
 async def _guild_if_owner(

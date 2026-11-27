@@ -5,12 +5,12 @@ import functools
 import logging
 from collections.abc import Awaitable, Callable, Collection
 
-import grpc.aio
 import hikari
 import msgspec
 from librebots.hub.v1.guilds_pb2 import GuildJoinedRequest, GuildLeftRequest, SyncedGuild, SyncGuildsRequest
 from librebots.hub.v1.shards_pb2 import ShardSet
 
+from librebots.kit._rpc import call
 from librebots.kit.hub import Hub, HubError
 
 __all__ = ["GuildReporter", "SyncResult"]
@@ -67,7 +67,7 @@ class GuildReporter:
             request = SyncGuildsRequest(
                 shards=ShardSet(shard_ids=sorted(shards), shard_count=shard_count), guilds=guilds
             )
-            response = await _call("SyncGuilds", self._hub.guilds.SyncGuilds(request, timeout=self._timeout))
+            response = await call("SyncGuilds", self._hub.guilds.SyncGuilds(request, timeout=self._timeout))
             await self._report_again()
         return SyncResult(joined=response.joined, left=response.left)
 
@@ -94,16 +94,9 @@ class GuildReporter:
         request = GuildJoinedRequest(
             guild_id=guild_id, preferred_locale=preferred_locale, member_count=member_count or 0
         )
-        response = await _call("GuildJoined", self._hub.guilds.GuildJoined(request, timeout=self._timeout))
+        response = await call("GuildJoined", self._hub.guilds.GuildJoined(request, timeout=self._timeout))
         return response.settings.locale
 
     async def _report_leave(self, guild_id: int) -> None:
         request = GuildLeftRequest(guild_id=guild_id)
-        await _call("GuildLeft", self._hub.guilds.GuildLeft(request, timeout=self._timeout))
-
-
-async def _call[T](method: str, call: Awaitable[T]) -> T:
-    try:
-        return await call
-    except grpc.aio.AioRpcError as exc:
-        raise HubError(f"{method} failed with {exc.code().name}: {exc.details()}") from exc
+        await call("GuildLeft", self._hub.guilds.GuildLeft(request, timeout=self._timeout))

@@ -2,6 +2,9 @@
 
 Needs a `Catalog` with kit's texts (`kit.LOCALES`) and a risa client in lightbulb's dependency injection. Its handlers
 run last, so a bot's own error handlers at the default priority come first.
+
+The answer is visible to the caller only, except after a public defer: it then replaces the "thinking" message, and
+Discord keeps that message's visibility.
 """
 
 from __future__ import annotations
